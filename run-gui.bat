@@ -1,2 +1,3 @@
 @echo off
-start "" venv\Scripts\python.exe agyp_gui.py %*
+:: Run GUI using system python — no venv required
+start "" pythonw "%~dp0agyp_gui.py" %*

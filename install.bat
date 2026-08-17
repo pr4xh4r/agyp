@@ -1,20 +1,30 @@
 @echo off
+setlocal
 echo [*] Setting up Antigravity Profiles Suite...
 echo.
 
-:: Create Virtual Environment
-echo [*] Creating virtual environment...
-python -m venv venv
+:: Check Python is available
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo [!] Python not found. Please install Python 3.8+ from https://python.org
+    pause
+    exit /b 1
+)
 
-:: Install Requirements
+:: Install customtkinter globally (no venv needed)
 echo [*] Installing GUI dependencies...
-call venv\Scripts\activate.bat
-pip install customtkinter
+pip install --quiet customtkinter
+if errorlevel 1 (
+    echo [!] Failed to install customtkinter. Try running as Administrator.
+    pause
+    exit /b 1
+)
 
 echo.
 echo [+] Installation Complete!
 echo.
 echo You can now use the provided batch files to launch the tools:
-echo  - Double-click 'run-cli.bat' for the terminal manager.
-echo  - Double-click 'run-gui.bat' for the graphical manager.
+echo   - Double-click 'run-cli.bat' for the terminal manager.
+echo   - Double-click 'run-gui.bat' for the graphical manager.
+echo.
 pause

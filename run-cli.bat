@@ -1,3 +1,4 @@
 @echo off
-python agyp_cli.py %*
+:: Run CLI using system python
+python "%~dp0agyp_cli.py" %*
 pause
