@@ -173,12 +173,16 @@ def _swap_in(profile_dir: Path):
     swapped = 0
     for sys_path, filename in AUTH_FILES:
         src = profile_dir / filename
+        sys_path.parent.mkdir(parents=True, exist_ok=True)
         if src.exists():
-            sys_path.parent.mkdir(parents=True, exist_ok=True)
             if sys_path.exists():
                 shutil.copy2(sys_path, sys_path.with_suffix(".agyp-backup"))
             shutil.copy2(src, sys_path)
             swapped += 1
+        else:
+            if sys_path.exists():
+                shutil.copy2(sys_path, sys_path.with_suffix(".agyp-backup"))
+                sys_path.unlink()
     return swapped
 
 

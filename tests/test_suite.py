@@ -169,7 +169,8 @@ class TestAuthSwap(BaseTest):
         d.mkdir()
         swapped = agyp_cli.swap_in_profile(d)
         self.assertEqual(swapped, 0)
-        self.assertEqual(self.token_path.read_text(), '{"token":"live-token-abc"}')
+        # Live token must be cleared so the user is forced to log in fresh
+        self.assertFalse(self.token_path.exists())
 
     # User 10: Arch — switch to existing profile
     def test_u10_swap_existing_profile(self):
