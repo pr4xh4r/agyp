@@ -53,8 +53,8 @@ When agy1 hits a rate limit, open the tool, switch to agy2, keep going. When you
 
 **Linux**
 ```bash
-git clone https://github.com/pr4xh4r/agyp-suite
-cd agyp-suite
+git clone https://github.com/pr4xh4r/agyp
+cd agyp
 bash install.sh
 ```
 

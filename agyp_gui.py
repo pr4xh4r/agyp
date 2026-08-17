@@ -20,16 +20,33 @@ VERSION = "1.1.0"
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# Cross-platform real home detection (pwd is Unix-only, Windows uses USERPROFILE)
+# Antigravity sets HOME=/home/user/.agy_accounts/N per account.
+# We MUST use the $HOME env var so we read/write the correct token location.
 if sys.platform == "win32":
     REAL_HOME = Path(os.environ.get("USERPROFILE") or os.path.expanduser("~"))
 else:
+    _env_home = os.environ.get("HOME")
+    if _env_home:
+        REAL_HOME = Path(_env_home)
+    else:
+        try:
+            import pwd as _pwd
+            REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
+        except (ImportError, KeyError):
+            REAL_HOME = Path(os.path.expanduser("~"))
+
+# Profiles dir is always in the REAL system home, not the Antigravity sandbox
+# so use the passwd db (actual /home/user) for profile storage only
+if sys.platform != "win32":
     try:
         import pwd as _pwd
-        REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
+        _SYSTEM_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
     except (ImportError, KeyError):
-        REAL_HOME = Path(os.path.expanduser("~"))
-AGY_ACCOUNTS_DIR = REAL_HOME / "agyp-profiles"
+        _SYSTEM_HOME = REAL_HOME
+else:
+    _SYSTEM_HOME = REAL_HOME
+
+AGY_ACCOUNTS_DIR = _SYSTEM_HOME / "agyp-profiles"
 APP_TITLE = "Antigravity Profiles"
 
 # Color Palette (Light, Dark)

@@ -5,16 +5,33 @@ import subprocess
 import shutil
 from pathlib import Path
 
-# Cross-platform real home detection
-# pwd is Unix-only; Windows uses USERPROFILE/HOMEDRIVE+HOMEPATH
+# Antigravity isolates each account under HOME=/home/user/.agy_accounts/N
+# so we MUST use the current $HOME env var (not the system passwd home)
+# to find the correct token location that Antigravity reads from.
+# We only fall back to pwd if HOME is somehow not set.
 if sys.platform == "win32":
     REAL_HOME = Path(os.environ.get("USERPROFILE") or os.path.expanduser("~"))
 else:
+    _env_home = os.environ.get("HOME")
+    if _env_home:
+        REAL_HOME = Path(_env_home)
+    else:
+        try:
+            import pwd as _pwd
+            REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
+        except (ImportError, KeyError):
+            REAL_HOME = Path(os.path.expanduser("~"))
+
+# Profiles are always stored in the REAL system home (/home/user)
+# regardless of which .agy_accounts/N sandbox Antigravity activates.
+if sys.platform != "win32":
     try:
         import pwd as _pwd
-        REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
+        _SYSTEM_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
     except (ImportError, KeyError):
-        REAL_HOME = Path(os.path.expanduser("~"))
+        _SYSTEM_HOME = REAL_HOME
+else:
+    _SYSTEM_HOME = REAL_HOME
 
 VERSION = "1.1.0"
 
@@ -27,10 +44,10 @@ C_WHITE  = "\033[1;37m"
 C_GRAY   = "\033[38;5;245m"
 C_RESET  = "\033[0m"
 
-# Profile storage dir (no leading dot — visible folder)
-PROFILES_DIR = REAL_HOME / "agyp-profiles"
+# Profile storage dir — always in real system home
+PROFILES_DIR = _SYSTEM_HOME / "agyp-profiles"
 
-# Auth files — CLI token + Desktop App credentials
+# Auth files — always in REAL_HOME (the active Antigravity .agy_accounts/N dir)
 OAUTH_TOKEN_PATH = REAL_HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
 DESKTOP_CREDS    = REAL_HOME / ".gemini" / "oauth_creds.json"
 DESKTOP_ACCOUNTS = REAL_HOME / ".gemini" / "google_accounts.json"
