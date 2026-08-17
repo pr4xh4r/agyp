@@ -46,20 +46,39 @@ class App(ctk.CTk):
         )
         self.lbl_title.grid(row=0, column=0, rowspan=2, sticky="w")
         
-        # Theme Switch (Icon based)
-        self.switch_var = ctk.StringVar(value="on")
-        self.theme_switch = ctk.CTkSwitch(
-            self.header_frame, 
-            text="☾ Dark", 
-            command=self.toggle_theme,
-            variable=self.switch_var, 
-            onvalue="on", 
-            offvalue="off",
-            font=ctk.CTkFont(family="San Francisco", size=14, weight="bold"),
-            progress_color=AGY_BLUE,
-            button_color=("gray30", "white")
+        # Action Icons Frame (Top Right)
+        self.icons_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
+        self.icons_frame.grid(row=0, column=1, rowspan=2, sticky="e")
+
+        # Theme Icon Toggle
+        self.theme_btn = ctk.CTkButton(
+            self.icons_frame,
+            text="☀",
+            width=30,
+            height=30,
+            corner_radius=15,
+            fg_color="transparent",
+            text_color=("black", "white"),
+            hover_color=("gray85", "gray20"),
+            font=ctk.CTkFont(size=20),
+            command=self.toggle_theme
         )
-        self.theme_switch.grid(row=0, column=1, rowspan=2, sticky="e")
+        self.theme_btn.pack(side="left", padx=5)
+
+        # Close Window Icon
+        self.close_btn = ctk.CTkButton(
+            self.icons_frame,
+            text="✖",
+            width=30,
+            height=30,
+            corner_radius=15,
+            fg_color="transparent",
+            text_color=("black", "white"),
+            hover_color="#FF3B30", # iOS Red on hover
+            font=ctk.CTkFont(size=18),
+            command=self.destroy
+        )
+        self.close_btn.pack(side="left")
         
         # Profile List Frame (iOS style card)
         self.list_frame = ctk.CTkFrame(self, fg_color=("gray95", "gray12"), corner_radius=20)
@@ -145,16 +164,14 @@ class App(ctk.CTk):
         self.refresh_list()
         
     def toggle_theme(self):
-        if self.switch_var.get() == "on":
-            ctk.set_appearance_mode("Dark")
-            self.theme_switch.configure(text="☾ Dark")
-            # Update hover color for outline button in dark mode
-            self.btn_delete.configure(hover_color="gray15")
-        else:
+        if ctk.get_appearance_mode() == "Dark":
             ctk.set_appearance_mode("Light")
-            self.theme_switch.configure(text="☀ Light")
-            # Update hover color for outline button in light mode
+            self.theme_btn.configure(text="☾")
             self.btn_delete.configure(hover_color="gray90")
+        else:
+            ctk.set_appearance_mode("Dark")
+            self.theme_btn.configure(text="☀")
+            self.btn_delete.configure(hover_color="gray15")
             
     def get_profiles(self):
         if not AGY_ACCOUNTS_DIR.exists():
