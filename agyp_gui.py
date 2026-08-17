@@ -5,6 +5,7 @@ An iOS-inspired, minimalist GUI manager for the Antigravity Desktop App.
 Built with customtkinter with automatic Dark/Light mode switching.
 """
 import os
+import re
 import sys
 import shutil
 import subprocess
@@ -21,10 +22,31 @@ TARGET_CMD = "antigravity"
 APP_TITLE = "Antigravity Profiles"
 AGY_BLUE = "#007AFF" # iOS Blue
 
+# Cross-platform UI font
+UI_FONT = 'SF Pro Display' if sys.platform == 'darwin' else ('Segoe UI' if sys.platform == 'win32' else 'sans-serif')
+
+def detect_icon_support() -> bool:
+    """Return True if JetBrainsMono Nerd Font is available in tkinter font families."""
+    try:
+        import tkinter.font as tkfont
+        _root = tk.Tk()
+        _root.withdraw()
+        families = tkfont.families(_root)
+        _root.destroy()
+        return "JetBrainsMono Nerd Font" in families
+    except Exception:
+        return False
+
+_NERD_FONTS = detect_icon_support()
+ICON_SUN   = "\U000f0599" if _NERD_FONTS else "\u2600"   # ☀
+ICON_MOON  = "\U000f0594" if _NERD_FONTS else "\u263d"   # ☽
+ICON_CLOSE = "\U000f0156" if _NERD_FONTS else "\u2715"   # ✕
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
+        self.bind('<Command-w>', lambda e: self.destroy())
         self.geometry("700x650")
         self.resizable(False, False)
         
@@ -50,7 +72,7 @@ class App(ctk.CTk):
         self.lbl_title = ctk.CTkLabel(
             self.header_frame, 
             text="Antigravity Profiles (BETA)", 
-            font=ctk.CTkFont(family="San Francisco", size=24, weight="bold"),
+            font=ctk.CTkFont(family=UI_FONT, size=24, weight="bold"),
             text_color=("black", "white")
         )
         self.lbl_title.grid(row=0, column=1, sticky="w", padx=10)
@@ -62,16 +84,17 @@ class App(ctk.CTk):
         self.icons_frame.grid(row=0, column=2, sticky="e")
 
         # Theme Icon Toggle
+        _icon_font_family = "JetBrainsMono Nerd Font" if _NERD_FONTS else UI_FONT
         self.theme_btn = ctk.CTkButton(
             self.icons_frame,
-            text="\U000f0599", # Nerd Font MDI Sun
+            text=ICON_SUN,
             width=36,
             height=36,
             corner_radius=18,
             fg_color=("gray90", "gray15"),
             text_color=("black", "white"),
             hover_color=("gray80", "gray25"),
-            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=20),
+            font=ctk.CTkFont(family=_icon_font_family, size=20),
             command=self.toggle_theme
         )
         self.theme_btn.pack(side="left", padx=5)
@@ -79,14 +102,14 @@ class App(ctk.CTk):
         # Close Window Icon
         self.close_btn = ctk.CTkButton(
             self.icons_frame,
-            text="\U000f0156", # Nerd Font MDI Cross
+            text=ICON_CLOSE,
             width=36,
             height=36,
             corner_radius=18,
             fg_color=("gray90", "gray15"),
             text_color=("black", "white"),
             hover_color=("#FF3B30", "#FF453A"),
-            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=20),
+            font=ctk.CTkFont(family=_icon_font_family, size=20),
             command=self.destroy
         )
         self.close_btn.pack(side="left")
@@ -113,7 +136,7 @@ class App(ctk.CTk):
         self.btn_launch = ctk.CTkButton(
             self.action_frame, 
             text="Launch", 
-            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
+            font=ctk.CTkFont(family=UI_FONT, size=16, weight="bold"),
             fg_color=("#007AFF", "#0A84FF"),
             hover_color=("#005bb5", "#0066cc"),
             text_color="white",
@@ -127,7 +150,7 @@ class App(ctk.CTk):
         self.btn_delete = ctk.CTkButton(
             self.action_frame, 
             text="Delete", 
-            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
+            font=ctk.CTkFont(family=UI_FONT, size=16, weight="bold"),
             fg_color=("gray85", "#2C2C2E"), # iOS System Gray 5
             text_color=("#FF3B30", "#FF453A"),
             hover_color=("gray75", "#3A3A3C"),
@@ -146,7 +169,7 @@ class App(ctk.CTk):
         self.entry_new = ctk.CTkEntry(
             self.new_frame, 
             placeholder_text="New profile name...",
-            font=ctk.CTkFont(family="San Francisco", size=16),
+            font=ctk.CTkFont(family=UI_FONT, size=16),
             height=45,
             corner_radius=12,
             fg_color=("gray90", "#1C1C1E"),
@@ -158,7 +181,7 @@ class App(ctk.CTk):
         self.btn_add = ctk.CTkButton(
             self.new_frame, 
             text="Add Profile", 
-            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
+            font=ctk.CTkFont(family=UI_FONT, size=16, weight="bold"),
             fg_color=("#34C759", "#32D74B"), # iOS System Green
             hover_color=("#2eab4d", "#2ebf43"),
             text_color="white",
@@ -174,10 +197,10 @@ class App(ctk.CTk):
     def toggle_theme(self):
         if ctk.get_appearance_mode() == "Dark":
             ctk.set_appearance_mode("Light")
-            self.theme_btn.configure(text="\U000f0594") # MDI Moon
+            self.theme_btn.configure(text=ICON_MOON)
         else:
             ctk.set_appearance_mode("Dark")
-            self.theme_btn.configure(text="\U000f0599") # MDI Sun
+            self.theme_btn.configure(text=ICON_SUN)
             
     def get_profiles(self):
         if not AGY_ACCOUNTS_DIR.exists():
@@ -228,7 +251,7 @@ class App(ctk.CTk):
                 hover_color=("gray85", "gray20"),
                 anchor="w",
                 corner_radius=10,
-                font=ctk.CTkFont(family="San Francisco", size=16),
+                font=ctk.CTkFont(family=UI_FONT, size=16),
                 height=45,
                 command=lambda name=p: self.on_profile_select(name)
             )

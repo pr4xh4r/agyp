@@ -14,6 +14,24 @@ C_WHITE = "\033[1;37m"
 C_GRAY = "\033[38;5;245m"
 C_RESET = "\033[0m"
 
+def sanitize_name(name):
+    """Sanitize a profile name to prevent path traversal attacks.
+    
+    - Strips leading/trailing whitespace
+    - Rejects names containing '/', '\\\\', '..', or starting with '.'
+    - Only allows alphanumeric characters, spaces, hyphens, and underscores
+    - Returns the cleaned name, or None if invalid
+    """
+    import re
+    name = name.strip()
+    if not name:
+        return None
+    if '/' in name or '\\' in name or '..' in name or name.startswith('.'):
+        return None
+    if not re.match(r'^[A-Za-z0-9 _-]+$', name):
+        return None
+    return name
+
 def get_key():
     """Reads a single keypress cross-platform without echoing to the screen."""
     if sys.platform == "win32":
@@ -109,8 +127,11 @@ def interactive_menu(profiles):
                 elif mode == "create":
                     if current_idx == 0: # Enter Name
                         sys.stdout.write("\033[?25h")
-                        choice = input(f"\n {C_WHITE}Name:{C_RESET} ").strip()
-                        if not choice: 
+                        raw = input(f"\n {C_WHITE}Name:{C_RESET} ")
+                        choice = sanitize_name(raw)
+                        if choice is None:
+                            print(f"\n {C_RED}Invalid name. Use only letters, digits, spaces, hyphens, underscores.{C_RESET}")
+                            import time; time.sleep(1.5)
                             sys.stdout.write("\033[?25l")
                             continue # Go back to menu
                         return choice
@@ -170,7 +191,12 @@ def main():
     accounts_dir = Path.home() / ".agyp-profiles"
     
     if len(sys.argv) >= 2:
-        launch_profile(sys.argv[1], sys.argv[2:])
+        argv_profile = sanitize_name(sys.argv[1])
+        if argv_profile is None:
+            print(f"{C_RED}Error: Invalid profile name '{sys.argv[1]}'. "
+                  f"Use only letters, digits, spaces, hyphens, underscores.{C_RESET}")
+            sys.exit(1)
+        launch_profile(argv_profile, sys.argv[2:])
         return
 
     profiles = []
