@@ -254,15 +254,39 @@ class App(ctk.CTk):
         env = os.environ.copy()
         env["HOME"] = str(profile_dir)
         
-        try:
-            if sys.platform == "darwin":
-                subprocess.Popen(["open", "-a", TARGET_CMD], env=env)
-            elif sys.platform == "win32":
-                subprocess.Popen(f'start "" {TARGET_CMD}', env=env, shell=True)
+        if sys.platform == "darwin":
+            # macOS relies on the App bundle name
+            cmd = ["open", "-n", "-a", "Antigravity"]
+            try:
+                result = subprocess.run(cmd, env=env, capture_output=True)
+                if result.returncode != 0:
+                    self.show_error("Could not find 'Antigravity' in Applications.")
+            except Exception as e:
+                self.show_error(f"Launch failed: {e}")
+                
+        elif sys.platform == "win32":
+            # Windows shell execution
+            try:
+                subprocess.Popen('start "" "antigravity"', env=env, shell=True)
+            except Exception as e:
+                self.show_error(f"Launch failed: {e}")
+                
+        else:
+            # Linux: Search PATH for possible binary names
+            linux_cmds = ["antigravity", "Antigravity", "antigravity-desktop", "antigravity-bin"]
+            valid_cmd = None
+            for c in linux_cmds:
+                if shutil.which(c):
+                    valid_cmd = c
+                    break
+            
+            if valid_cmd:
+                try:
+                    subprocess.Popen([valid_cmd], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception as e:
+                    self.show_error(f"Launch failed: {e}")
             else:
-                subprocess.Popen([TARGET_CMD], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except FileNotFoundError:
-            self.show_error(f"Could not find '{TARGET_CMD}' on your system.")
+                self.show_error("Could not find 'antigravity' in your PATH.")
 
     def launch_profile(self):
         p = self.selected_profile.get()
