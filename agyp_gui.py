@@ -68,14 +68,14 @@ class App(ctk.CTk):
         # Close Window Icon
         self.close_btn = ctk.CTkButton(
             self.icons_frame,
-            text="✖",
+            text="✕",
             width=30,
             height=30,
             corner_radius=15,
             fg_color="transparent",
             text_color=("black", "white"),
             hover_color="#FF3B30", # iOS Red on hover
-            font=ctk.CTkFont(size=18),
+            font=ctk.CTkFont(size=20, weight="bold"),
             command=self.destroy
         )
         self.close_btn.pack(side="left")
@@ -180,6 +180,11 @@ class App(ctk.CTk):
 
     def on_profile_select(self, profile_name):
         self.selected_profile.set(profile_name)
+        
+        # Cancel any pending inline delete
+        if hasattr(self, 'cancel_delete'):
+            self.cancel_delete()
+            
         # Update styling for iOS list style
         for btn in self.profile_buttons:
             if btn.cget("text") == profile_name:
@@ -265,28 +270,53 @@ class App(ctk.CTk):
         p = self.selected_profile.get()
         if not p: return
         
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Confirm")
-        dialog.geometry("350x150")
-        dialog.transient(self)
-        dialog.grab_set()
+        # Hide standard action buttons
+        self.btn_launch.grid_forget()
+        self.btn_delete.grid_forget()
         
-        lbl = ctk.CTkLabel(dialog, text=f"Delete '{p}'?", font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"))
-        lbl.pack(pady=(20, 10))
+        # Show inline confirmation buttons
+        self.btn_confirm = ctk.CTkButton(
+            self.action_frame,
+            text=f"Confirm Delete '{p}'?",
+            font=ctk.CTkFont(family="San Francisco", size=15, weight="bold"),
+            fg_color="#FF3B30",
+            hover_color="#c92a22",
+            text_color="white",
+            corner_radius=25,
+            height=50,
+            command=self.execute_delete
+        )
+        self.btn_confirm.grid(row=0, column=0, padx=(0, 5), sticky="ew")
         
-        frame = ctk.CTkFrame(dialog, fg_color="transparent")
-        frame.pack()
+        self.btn_cancel_del = ctk.CTkButton(
+            self.action_frame,
+            text="Cancel",
+            font=ctk.CTkFont(family="San Francisco", size=15, weight="bold"),
+            fg_color="transparent",
+            border_width=2,
+            border_color=("gray70", "gray40"),
+            text_color=("black", "white"),
+            hover_color=("gray85", "gray25"),
+            corner_radius=25,
+            height=50,
+            command=self.cancel_delete
+        )
+        self.btn_cancel_del.grid(row=0, column=1, padx=(5, 0), sticky="ew")
+
+    def cancel_delete(self):
+        if hasattr(self, 'btn_confirm') and self.btn_confirm.winfo_exists():
+            self.btn_confirm.destroy()
+            self.btn_cancel_del.destroy()
+        # Restore standard action buttons
+        self.btn_launch.grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        self.btn_delete.grid(row=0, column=1, padx=(5, 0), sticky="ew")
         
-        def confirm():
+    def execute_delete(self):
+        p = self.selected_profile.get()
+        if p:
             shutil.rmtree(AGY_ACCOUNTS_DIR / p)
-            self.refresh_list()
-            dialog.destroy()
-            
-        btn_yes = ctk.CTkButton(frame, text="Yes, Delete", fg_color="#FF3B30", hover_color="#c92a22", width=100, corner_radius=15, command=confirm)
-        btn_yes.pack(side=tk.LEFT, padx=10)
-        
-        btn_no = ctk.CTkButton(frame, text="Cancel", fg_color=("gray75", "gray30"), text_color=("black", "white"), hover_color=("gray65", "gray25"), width=100, corner_radius=15, command=dialog.destroy)
-        btn_no.pack(side=tk.RIGHT, padx=10)
+        self.cancel_delete()
+        self.refresh_list()
 
 if __name__ == "__main__":
     App().mainloop()
