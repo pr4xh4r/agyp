@@ -26,8 +26,13 @@ AGY_BLUE = "#007AFF" # iOS Blue
 UI_FONT = 'SF Pro Display' if sys.platform == 'darwin' else ('Segoe UI' if sys.platform == 'win32' else 'sans-serif')
 
 def detect_icon_support() -> bool:
-    """Return True if JetBrainsMono Nerd Font is available in tkinter font families."""
+    """Return True if JetBrainsMono Nerd Font is available in tkinter font families.
+    Returns False immediately if no display is available (headless/SSH)."""
     try:
+        # Guard: check for a display before touching tkinter
+        if sys.platform != "win32" and sys.platform != "darwin":
+            if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+                return False
         import tkinter.font as tkfont
         _root = tk.Tk()
         _root.withdraw()
@@ -46,6 +51,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
+        # Native window close button (macOS red dot, Windows X)
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.bind('<Command-w>', lambda e: self.destroy())
         self.geometry("700x650")
         self.resizable(False, False)

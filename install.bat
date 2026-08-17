@@ -11,9 +11,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Install customtkinter globally (no venv needed)
+:: Install customtkinter (--user works on restricted/corporate machines)
 echo [*] Installing GUI dependencies...
-pip install --quiet customtkinter
+pip install --user --quiet customtkinter
+if errorlevel 1 (
+    pip install --quiet customtkinter
+)
 if errorlevel 1 (
     echo [!] Failed to install customtkinter. Try running as Administrator.
     pause
