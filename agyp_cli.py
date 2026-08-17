@@ -3,11 +3,18 @@ import os
 import sys
 import subprocess
 import shutil
-import pwd as _pwd
 from pathlib import Path
 
-# Always use the real system home — not the isolated session HOME Antigravity may set
-REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
+# Cross-platform real home detection
+# pwd is Unix-only; Windows uses USERPROFILE/HOMEDRIVE+HOMEPATH
+if sys.platform == "win32":
+    REAL_HOME = Path(os.environ.get("USERPROFILE") or os.path.expanduser("~"))
+else:
+    try:
+        import pwd as _pwd
+        REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError):
+        REAL_HOME = Path(os.path.expanduser("~"))
 
 VERSION = "1.1.0"
 

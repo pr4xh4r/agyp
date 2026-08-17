@@ -20,9 +20,15 @@ VERSION = "1.1.0"
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-import pwd as _pwd
-# Always use the real system home — not the isolated session HOME Antigravity may set
-REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
+# Cross-platform real home detection (pwd is Unix-only, Windows uses USERPROFILE)
+if sys.platform == "win32":
+    REAL_HOME = Path(os.environ.get("USERPROFILE") or os.path.expanduser("~"))
+else:
+    try:
+        import pwd as _pwd
+        REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError):
+        REAL_HOME = Path(os.path.expanduser("~"))
 AGY_ACCOUNTS_DIR = REAL_HOME / "agyp-profiles"
 APP_TITLE = "Antigravity Profiles"
 
