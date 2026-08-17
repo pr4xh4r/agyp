@@ -41,7 +41,7 @@ class App(ctk.CTk):
         self.lbl_title = ctk.CTkLabel(
             self.header_frame, 
             text="Antigravity Profiles (BETA)", 
-            font=ctk.CTkFont(family="Helvetica", size=24, weight="bold"),
+            font=ctk.CTkFont(family="San Francisco", size=24, weight="bold"),
             text_color=("black", "white")
         )
         self.lbl_title.grid(row=0, column=0, rowspan=2, sticky="w")
@@ -55,7 +55,7 @@ class App(ctk.CTk):
             variable=self.switch_var, 
             onvalue="on", 
             offvalue="off",
-            font=ctk.CTkFont(family="Helvetica", size=14, weight="bold"),
+            font=ctk.CTkFont(family="San Francisco", size=14, weight="bold"),
             progress_color=AGY_BLUE,
             button_color=("gray30", "white")
         )
@@ -83,7 +83,7 @@ class App(ctk.CTk):
         self.btn_launch = ctk.CTkButton(
             self.action_frame, 
             text="Launch", 
-            font=ctk.CTkFont(family="Helvetica", size=16, weight="bold"),
+            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
             fg_color=AGY_BLUE,
             hover_color="#005bb5",
             text_color="white",
@@ -97,7 +97,7 @@ class App(ctk.CTk):
         self.btn_delete = ctk.CTkButton(
             self.action_frame, 
             text="Delete", 
-            font=ctk.CTkFont(family="Helvetica", size=16, weight="bold"),
+            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
             fg_color="transparent", 
             border_width=2,
             border_color="#FF3B30",
@@ -118,7 +118,7 @@ class App(ctk.CTk):
         self.entry_new = ctk.CTkEntry(
             self.new_frame, 
             placeholder_text="New profile name...",
-            font=ctk.CTkFont(family="Helvetica", size=16),
+            font=ctk.CTkFont(family="San Francisco", size=16),
             height=50,
             corner_radius=25,
             fg_color=("white", "gray16"),
@@ -131,7 +131,7 @@ class App(ctk.CTk):
         self.btn_add = ctk.CTkButton(
             self.new_frame, 
             text="Add Profile", 
-            font=ctk.CTkFont(family="Helvetica", size=16, weight="bold"),
+            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
             fg_color="#34C759", # iOS Green
             hover_color="#248a3d",
             text_color="white",
@@ -200,7 +200,7 @@ class App(ctk.CTk):
                 hover_color=("gray85", "gray20"),
                 anchor="w",
                 corner_radius=10,
-                font=ctk.CTkFont(family="Helvetica", size=16),
+                font=ctk.CTkFont(family="San Francisco", size=16),
                 height=45,
                 command=lambda name=p: self.on_profile_select(name)
             )
@@ -254,7 +254,7 @@ class App(ctk.CTk):
         dialog.transient(self)
         dialog.grab_set()
         
-        lbl = ctk.CTkLabel(dialog, text=f"Delete '{p}'?", font=ctk.CTkFont(family="Helvetica", size=16, weight="bold"))
+        lbl = ctk.CTkLabel(dialog, text=f"Delete '{p}'?", font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"))
         lbl.pack(pady=(20, 10))
         
         frame = ctk.CTkFrame(dialog, fg_color="transparent")
