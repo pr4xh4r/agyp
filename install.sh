@@ -14,8 +14,11 @@ chmod +x "$BIN_DIR/agyp-cli"
 # Also link 'agyp' to CLI for backward compatibility if desired
 ln -sf "$BIN_DIR/agyp-cli" "$BIN_DIR/agyp"
 
-# Install GUI
-cp agyp_gui.py "$BIN_DIR/agyp-gui"
+# Install GUI Wrapper
+cat << 'EOF' > "$BIN_DIR/agyp-gui"
+#!/bin/bash
+exec /home/pr4xh4r/agyp-suite/venv/bin/python3 /home/pr4xh4r/agyp-suite/agyp_gui.py "$@"
+EOF
 chmod +x "$BIN_DIR/agyp-gui"
 
 # Create Desktop Entry for GUI
