@@ -112,7 +112,7 @@ class App(ctk.CTk):
         
         self.btn_launch = ctk.CTkButton(
             self.action_frame, 
-            text="Launch", 
+            text="[>] Launch", 
             font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=16, weight="bold"),
             fg_color=AGY_BLUE,
             hover_color="#005bb5",
@@ -126,7 +126,7 @@ class App(ctk.CTk):
         
         self.btn_delete = ctk.CTkButton(
             self.action_frame, 
-            text="Delete", 
+            text="[-] Delete", 
             font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=16, weight="bold"),
             fg_color="transparent", 
             border_width=2,
@@ -160,7 +160,7 @@ class App(ctk.CTk):
         
         self.btn_add = ctk.CTkButton(
             self.new_frame, 
-            text="Add Profile", 
+            text="[+] Add Profile", 
             font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=16, weight="bold"),
             fg_color="#34C759", # iOS Green
             hover_color="#248a3d",
@@ -288,7 +288,7 @@ class App(ctk.CTk):
         # Show inline confirmation buttons
         self.btn_confirm = ctk.CTkButton(
             self.action_frame,
-            text=f"Confirm Delete '{p}'?",
+            text=f"[-] Confirm Delete '{p}'?",
             font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=15, weight="bold"),
             fg_color="#FF3B30",
             hover_color="#c92a22",
@@ -301,7 +301,7 @@ class App(ctk.CTk):
         
         self.btn_cancel_del = ctk.CTkButton(
             self.action_frame,
-            text="Cancel",
+            text="[x] Cancel",
             font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=15, weight="bold"),
             fg_color="transparent",
             border_width=2,
