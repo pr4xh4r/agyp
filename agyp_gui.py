@@ -111,6 +111,22 @@ def _find_linux_cmd():
     return None
 
 
+def _find_windows_exe():
+    """Find the Antigravity desktop binary on Windows."""
+    candidates = [
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe"),
+        os.path.expandvars(r"%PROGRAMFILES%\Antigravity\Antigravity.exe"),
+        os.path.expandvars(r"%PROGRAMFILES(x86)%\Antigravity\Antigravity.exe"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    found = shutil.which("Antigravity.exe") or shutil.which("antigravity")
+    if found:
+        return found
+    return None
+
+
 def _swap_in(profile_dir: Path):
     """Copy this profile's auth files into the live system locations."""
     swapped = 0
@@ -466,30 +482,17 @@ class App(ctk.CTk):
             self._show_save_credentials_btn(profile_name)
 
         elif sys.platform == "win32":
-            try:
-                # Try common Windows install paths
-                exe_paths = [
-                    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe"),
-                    os.path.expandvars(r"%PROGRAMFILES%\Antigravity\Antigravity.exe"),
-                    "antigravity",
-                ]
-                launched = False
-                for path in exe_paths:
-                    if shutil.which(path) or os.path.isfile(path):
-                        proc = subprocess.Popen(
-                            [path] if os.path.isfile(path) else path,
-                            shell=isinstance(path, str) and not os.path.isfile(path)
-                        )
-                        self._monitor_process(proc, profile_name)
-                        launched = True
-                        break
-                if not launched:
-                    # Fallback: shell start
-                    proc = subprocess.Popen('start "" "antigravity"', shell=True)
+            exe = _find_windows_exe()
+            if exe:
+                try:
+                    proc = subprocess.Popen([exe])
                     self._monitor_process(proc, profile_name)
-            except Exception as e:
-                self.show_error(f"Launch failed: {e}")
+                except Exception as e:
+                    self.show_error(f"Launch failed: {e}")
+                    _clear_last_active()
+            else:
                 _clear_last_active()
+                self.show_error("Antigravity not found. Please install the Desktop App.")
 
         else:
             # Linux
