@@ -1,1 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
 venv/
+.venv/
+*.egg-info/
+
+# Never commit OAuth tokens or any credentials — EVER
+antigravity-oauth-token
+*.agyp-backup
+oauth_creds.json
+google_accounts.json
+*.token
+*.credentials
+
+# Profile data stays local, never in repo
+.agyp-profiles/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
