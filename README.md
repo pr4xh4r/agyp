@@ -89,6 +89,8 @@ On **macOS**, a yellow "Save Credentials" button appears after launching the Des
 
 On **Linux / Windows**, credentials are saved back automatically when the Desktop App closes.
 
+**Custom App Paths:** If you installed the Antigravity Desktop App in a non-standard location, simply click the ⚙️ (Gear) icon in the GUI header to locate it. The CLI will also interactively prompt you for the path if it can't find `agy` automatically.
+
 **CLI**
 ```bash
 agyp
