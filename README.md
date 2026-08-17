@@ -1,211 +1,120 @@
-<div align="center">
+# Antigravity Profiles
 
-```
-       ▄▀▀▄
-      ▀▀▀▀▀▀
-     ▀▀▀▀▀▀▀▀     Antigravity Profiles Suite
-    ▄▀▀    ▀▀▄
-   ▄▀▀      ▀▀▄
-```
+A small tool to manage multiple Antigravity accounts from one place. GUI and CLI both included.
 
-# Antigravity Profiles Suite
-
-**Switch between multiple Antigravity accounts instantly — GUI or CLI.**  
-Hit a limit? One click and you're on a fresh account, with your old history safe and waiting.
-
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)](#installation)
-[![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://python.org)
-[![License](https://img.shields.io/badge/license-MIT-green)](#license)
-
-</div>
+I built this because I kept hitting usage limits mid-project and the only option was to manually log out, log back in with a different account, and lose my place. That got old fast.
 
 ---
 
-## The Problem This Solves
+## What it does
 
-Antigravity accounts have usage limits. When you hit one mid-project, you have two choices:
+Keeps separate OAuth tokens for each "profile" (account). When you switch profiles, it swaps in that account's token and opens Antigravity — same app, same CLI, just a different login. Your history and `/resume` are tied to each Google account on Antigravity's servers, so nothing gets mixed up and nothing is lost.
 
-1. **Wait** for your limit to reset
-2. **Switch accounts** instantly and keep working
+Typical setup people use:
 
-This tool makes option 2 take **one click**.
+- `agy1` — main account, daily use
+- `agy2` — backup for when agy1 hits limits
+- `client` — separate account for client work
 
-Each profile is a completely separate Antigravity account — its own auth, its own session, its own server-side conversation history. Switching profiles is like handing off to a fresh colleague who has full access to their own history.
-
----
-
-## How It Works
-
-Each profile stores its own **auth credentials** in isolation:
-
-```
-~/.agyp-profiles/
-├── work/        ← Account 1 auth tokens + local config
-├── personal/    ← Account 2 auth tokens + local config
-└── client/      ← Account 3 auth tokens + local config
-```
-
-When you launch a profile, Antigravity (CLI or Desktop App) starts using that account's credentials. Your **conversation history, projects, and `/resume`** are all tied to the account on Antigravity's servers — they're always there, whether you're using the CLI or the GUI app.
+When agy1 hits a rate limit, open the tool, switch to agy2, keep going. When you come back to agy1 later, `/resume` picks up exactly where you left off.
 
 ---
 
-## The `/resume` Workflow
+## Install
 
-This is the real power. Your project history never dies — it's saved server-side per account.
-
-**Scenario: You hit a limit mid-project**
-
-```
-Profile "work" hits limit
-  → Open agyp, switch to "work-2"
-  → Type /resume inside Antigravity
-  → Pick up your project history and keep going
-```
-
-Each account's `/resume` shows only that account's conversations — perfectly organized by account, automatically.
-
-**You never lose history.** Every conversation is saved server-side. Switch back to any profile at any time and `/resume` exactly where you left off — days or months later.
-
----
-
-## Installation
-
-### Linux
-
+**Linux**
 ```bash
-git clone https://github.com/yourusername/agyp-suite.git
+git clone https://github.com/yourusername/agyp-suite
 cd agyp-suite
 bash install.sh
 ```
 
-The installer automatically:
-- Detects your Python environment (including Arch Linux / Debian 12 managed Python)
-- Installs `customtkinter` for the GUI
-- Creates `agyp-cli` and `agyp-gui` commands in `~/.local/bin/`
-- Adds a desktop shortcut to your app launcher
+That's it. The script handles Python environments including Arch/Debian where pip is restricted — it creates a small venv if needed.
 
-### macOS
-
+**macOS**
 ```bash
-git clone https://github.com/yourusername/agyp-suite.git
-cd agyp-suite
 bash install_mac.sh
 ```
 
-Then add to your `~/.zshrc`:
+You'll also need to add `~/.local/bin` to your PATH if it isn't already:
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 ```
 
-### Windows
+**Windows**
 
-1. Double-click **`install.bat`**
-2. Use **`run-gui.bat`** to launch the GUI
-3. Use **`run-cli.bat`** to launch the CLI
+Double-click `install.bat`, then use `run-gui.bat` or `run-cli.bat` to launch.
 
-> **Requirements**: Python 3.8+ from [python.org](https://python.org)
+Requires Python 3.8+ from python.org (not Microsoft Store).
 
 ---
 
 ## Usage
 
-### GUI — `agyp-gui`
-
+**GUI**
 ```bash
 agyp-gui
 ```
 
-- Click a profile → click **Launch** → Antigravity opens with that account
-- **Add Profile** — type a name, press Enter or click the green button
-- **Delete Profile** — select and click Delete, confirms inline
-- **Toggle theme** — click the ☀ / ☽ button top right
-- **Close** — ✕ button, Cmd+W (macOS), or native window close button
+Pick a profile from the list, hit Launch. Add new profiles with the text box at the bottom. Delete with the button — it asks for confirmation before doing anything.
 
-### CLI — `agyp` or `agyp-cli`
-
+**CLI**
 ```bash
 agyp
 ```
 
-Or jump straight to a profile:
-
+Arrow keys to navigate, Enter to select. Or go straight to a profile:
 ```bash
-agyp work
-agyp personal
-agyp client
+agyp agy1
+agyp agy2
 ```
 
-**Controls:**
-
-| Key | Action |
-|---|---|
-| `↑` / `↓` | Navigate |
-| `Enter` | Select / confirm |
-| `Ctrl+C` | Exit |
+First time you use a new profile, Antigravity will ask you to log in. After that the token is saved and it just works.
 
 ---
 
-## Real-World Use Cases
+## How the token swap works
 
-| Profile | Use |
-|---|---|
-| `work` | Main account — daily work, projects |
-| `work-2` | Backup — switch here when `work` hits limits |
-| `personal` | Personal projects, separate history |
-| `client-acme` | Dedicated account for a specific client |
-| `testing` | Burn through limits here, keep main clean |
+Antigravity stores its OAuth token at `~/.gemini/antigravity-cli/antigravity-oauth-token`.
 
----
+When you switch profiles, this tool:
+1. Backs up the current token
+2. Copies the selected profile's token into that path
+3. Launches Antigravity (or `agy` CLI)
+4. When the session ends, saves the (possibly refreshed) token back to the profile
 
-## Features
-
-| Feature | CLI | GUI |
-|---|---|---|
-| Switch Antigravity accounts | ✅ | ✅ |
-| Auth isolation per profile | ✅ | ✅ |
-| Works with CLI (`agy`) | ✅ | — |
-| Works with Desktop App | — | ✅ |
-| Create / delete profiles | ✅ | ✅ |
-| Dark / Light mode | — | ✅ |
-| macOS native close (red dot + Cmd+W) | — | ✅ |
-| Headless / SSH safe | ✅ | ✅ |
-| Works without Nerd Font | ✅ | ✅ |
-| Profile name security (no path traversal) | ✅ | ✅ |
+Everything else — history, projects, `/resume` — lives on Antigravity's servers per account. The tool doesn't touch any of that.
 
 ---
 
-## Project Structure
+## Files
 
 ```
-agyp-suite/
-├── agyp_cli.py        # TUI — interactive arrow-key menu, cross-platform
-├── agyp_gui.py        # GUI — iOS-inspired dark/light mode interface
-├── install.sh         # Linux installer (Arch, Ubuntu, Fedora, Debian...)
-├── install_mac.sh     # macOS installer
-├── install.bat        # Windows installer
-├── run-cli.bat        # Windows CLI launcher
-└── run-gui.bat        # Windows GUI launcher
+agyp_cli.py      — the terminal interface
+agyp_gui.py      — the GUI (customtkinter)
+install.sh       — Linux installer
+install_mac.sh   — macOS installer
+install.bat      — Windows installer
+run-cli.bat      — Windows CLI launcher
+run-gui.bat      — Windows GUI launcher
 ```
+
+Profiles are stored in `~/.agyp-profiles/`, one folder per profile containing just the OAuth token for that account.
 
 ---
 
 ## Requirements
 
-| | |
-|---|---|
-| Python | 3.8+ |
-| Antigravity | CLI (`agy`) or Desktop App |
-| GUI dep | `customtkinter` — auto-installed |
-| Font | JetBrainsMono Nerd Font *(optional, for sharp icons)* |
+- Python 3.8+
+- `customtkinter` — installed automatically
+- Antigravity CLI (`agy`) or the Desktop App installed
+
+The GUI works without a Nerd Font installed — it falls back to regular Unicode symbols if the font isn't there.
 
 ---
 
-## Contributing
+## Notes
 
-PRs welcome. Keep CLI and GUI in sync, avoid hardcoded paths, test cross-platform.
-
----
-
-## License
-
-MIT — use freely, keep attribution.
+- Tested on Arch Linux, Ubuntu, Fedora, macOS Sonoma, Windows 11
+- The GUI won't crash if you run it over SSH (it detects headless environments)
+- Profile names are sanitized — no path traversal or special characters allowed
