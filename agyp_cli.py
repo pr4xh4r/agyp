@@ -248,6 +248,12 @@ def launch_profile(profile, args):
 
     set_last_active(profile)
 
+    # Verify CLI exists before trying to run it
+    if not shutil.which("agy"):
+        print(f"{C_RED}Error: 'agy' command not found. Ensure Antigravity CLI is installed.{C_RESET}")
+        clear_last_active()
+        sys.exit(1)
+
     try:
         ret = subprocess.call(["agy"] + args, shell=(sys.platform == "win32"))
     except FileNotFoundError:
