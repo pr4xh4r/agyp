@@ -47,7 +47,7 @@ class App(ctk.CTk):
             lbl = ctk.CTkLabel(
                 self.header_frame,
                 text=line,
-                font=ctk.CTkFont(family="Courier", size=14, weight="bold"),
+                font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=14, weight="bold"),
                 text_color=AGY_BLUE,
                 height=20
             )
@@ -57,7 +57,7 @@ class App(ctk.CTk):
         self.lbl_title = ctk.CTkLabel(
             self.header_frame, 
             text="Antigravity Profiles (BETA)", 
-            font=ctk.CTkFont(family="San Francisco", size=24, weight="bold"),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=24, weight="bold"),
             text_color=("black", "white")
         )
         self.lbl_title.grid(row=2, column=1, sticky="w")
@@ -120,7 +120,7 @@ class App(ctk.CTk):
         self.btn_launch = ctk.CTkButton(
             self.action_frame, 
             text="Launch", 
-            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=16, weight="bold"),
             fg_color=AGY_BLUE,
             hover_color="#005bb5",
             text_color="white",
@@ -134,7 +134,7 @@ class App(ctk.CTk):
         self.btn_delete = ctk.CTkButton(
             self.action_frame, 
             text="Delete", 
-            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=16, weight="bold"),
             fg_color="transparent", 
             border_width=2,
             border_color="#FF3B30",
@@ -155,7 +155,7 @@ class App(ctk.CTk):
         self.entry_new = ctk.CTkEntry(
             self.new_frame, 
             placeholder_text="New profile name...",
-            font=ctk.CTkFont(family="San Francisco", size=16),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=16),
             height=50,
             corner_radius=25,
             fg_color=("white", "gray16"),
@@ -168,7 +168,7 @@ class App(ctk.CTk):
         self.btn_add = ctk.CTkButton(
             self.new_frame, 
             text="Add Profile", 
-            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=16, weight="bold"),
             fg_color="#34C759", # iOS Green
             hover_color="#248a3d",
             text_color="white",
@@ -240,7 +240,7 @@ class App(ctk.CTk):
                 hover_color=("gray85", "gray20"),
                 anchor="w",
                 corner_radius=10,
-                font=ctk.CTkFont(family="San Francisco", size=16),
+                font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=16),
                 height=45,
                 command=lambda name=p: self.on_profile_select(name)
             )
@@ -296,7 +296,7 @@ class App(ctk.CTk):
         self.btn_confirm = ctk.CTkButton(
             self.action_frame,
             text=f"Confirm Delete '{p}'?",
-            font=ctk.CTkFont(family="San Francisco", size=15, weight="bold"),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=15, weight="bold"),
             fg_color="#FF3B30",
             hover_color="#c92a22",
             text_color="white",
@@ -309,7 +309,7 @@ class App(ctk.CTk):
         self.btn_cancel_del = ctk.CTkButton(
             self.action_frame,
             text="Cancel",
-            font=ctk.CTkFont(family="San Francisco", size=15, weight="bold"),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=15, weight="bold"),
             fg_color="transparent",
             border_width=2,
             border_color=("gray70", "gray40"),
