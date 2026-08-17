@@ -272,11 +272,22 @@ class App(ctk.CTk):
                 self.show_error(f"Launch failed: {e}")
                 
         else:
-            # Linux: Search PATH for possible binary names
-            linux_cmds = ["antigravity", "Antigravity", "antigravity-desktop", "antigravity-bin"]
+            # Linux: Search PATH and common local installation directories
+            linux_cmds = [
+                "antigravity", 
+                "Antigravity", 
+                "antigravity-desktop", 
+                "antigravity-bin",
+                "antigravity-ide",
+                str(Path.home() / ".local/share/antigravity-ide/bin/antigravity-ide"),
+                str(Path.home() / "Downloads/Antigravity/Antigravity-x64/antigravity")
+            ]
             valid_cmd = None
             for c in linux_cmds:
                 if shutil.which(c):
+                    valid_cmd = shutil.which(c)
+                    break
+                elif os.path.isfile(c) and os.access(c, os.X_OK):
                     valid_cmd = c
                     break
             
