@@ -125,7 +125,7 @@ def interactive_menu(profiles):
                         draw_header()
                         ans = input(f" {C_RED}Permanently delete '{p_to_delete}'? (y/N): {C_RESET}").strip().lower()
                         if ans == 'y':
-                            target = Path.home() / ".agy_accounts" / p_to_delete
+                            target = Path.home() / ".agyp-profiles" / p_to_delete
                             if target.exists():
                                 shutil.rmtree(target)
                             profiles.remove(p_to_delete)
@@ -145,7 +145,7 @@ def interactive_menu(profiles):
     return None
 
 def launch_profile(profile, args):
-    profile_dir = Path.home() / ".agy_accounts" / profile
+    profile_dir = Path.home() / ".agyp-profiles" / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
     
     env = os.environ.copy()
@@ -167,7 +167,7 @@ def launch_profile(profile, args):
             sys.exit(1)
 
 def main():
-    accounts_dir = Path.home() / ".agy_accounts"
+    accounts_dir = Path.home() / ".agyp-profiles"
     
     if len(sys.argv) >= 2:
         launch_profile(sys.argv[1], sys.argv[2:])

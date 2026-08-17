@@ -16,7 +16,7 @@ import customtkinter as ctk
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-AGY_ACCOUNTS_DIR = Path.home() / ".agy_accounts"
+AGY_ACCOUNTS_DIR = Path.home() / ".agyp-profiles"
 TARGET_CMD = "antigravity"
 APP_TITLE = "Antigravity Profiles"
 AGY_BLUE = "#007AFF" # iOS Blue
