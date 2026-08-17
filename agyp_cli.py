@@ -151,7 +151,7 @@ def launch_profile(profile, args):
     env = os.environ.copy()
     env["HOME"] = str(profile_dir)
     
-    print(f"\n{C_BLUE}🚀 Launching profile '{profile}'...{C_RESET}\n")
+    print(f"\n{C_BLUE}Launching profile '{profile}'...{C_RESET}\n")
     
     if sys.platform == "win32":
         try:

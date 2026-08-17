@@ -25,7 +25,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("450x550")
+        self.geometry("700x650")
         self.resizable(False, False)
         
         # Main Container
@@ -75,7 +75,7 @@ class App(ctk.CTk):
         
         self.btn_launch = ctk.CTkButton(
             self.action_frame, 
-            text="🚀 Launch", 
+            text="Launch", 
             font=ctk.CTkFont(weight="bold"),
             fg_color=AGY_BLUE,
             hover_color="#3367D6",
@@ -111,7 +111,7 @@ class App(ctk.CTk):
         
         self.btn_add = ctk.CTkButton(
             self.new_frame, 
-            text="+ Add Profile", 
+            text="Add Profile", 
             font=ctk.CTkFont(weight="bold"),
             fg_color="#34A853",
             hover_color="#188038",
