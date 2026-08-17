@@ -35,38 +35,31 @@ class App(ctk.CTk):
         # Header Frame
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.header_frame.grid(row=0, column=0, pady=(30, 15), padx=30, sticky="ew")
-        # Logo (5 lines mapped to 5 rows)
-        logo_lines = [
-            "       ▄▀▀▄       ",
-            "      ▀▀▀▀▀▀      ",
-            "     ▀▀▀▀▀▀▀▀     ",
-            "    ▄▀▀    ▀▀▄    ",
-            "   ▄▀▀      ▀▀▄   "
-        ]
-        for i, line in enumerate(logo_lines):
-            lbl = ctk.CTkLabel(
-                self.header_frame,
-                text=line,
-                font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=14, weight="bold"),
-                text_color=AGY_BLUE,
-                height=20
-            )
-            lbl.grid(row=i, column=0, sticky="w")
+        # Logo (Single string for native line spacing)
+        logo_text = "       ▄▀▀▄       \n      ▀▀▀▀▀▀      \n     ▀▀▀▀▀▀▀▀     \n    ▄▀▀    ▀▀▄    \n   ▄▀▀      ▀▀▄   "
+        self.lbl_logo = ctk.CTkLabel(
+            self.header_frame,
+            text=logo_text,
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=14, weight="bold"),
+            text_color=AGY_BLUE,
+            justify="left"
+        )
+        self.lbl_logo.grid(row=0, column=0, sticky="w")
             
-        # Title (Aligned with middle line of logo)
+        # Title (Automatically centered vertically relative to the logo block)
         self.lbl_title = ctk.CTkLabel(
             self.header_frame, 
             text="Antigravity Profiles (BETA)", 
             font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=24, weight="bold"),
             text_color=("black", "white")
         )
-        self.lbl_title.grid(row=2, column=1, sticky="w")
+        self.lbl_title.grid(row=0, column=1, sticky="w")
         
         self.header_frame.grid_columnconfigure(1, weight=1)
         
-        # Action Icons Frame (Top Right, spanning all 5 rows)
+        # Action Icons Frame (Top Right)
         self.icons_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        self.icons_frame.grid(row=0, column=2, rowspan=5, sticky="e")
+        self.icons_frame.grid(row=0, column=2, sticky="e")
 
         # Theme Icon Toggle
         self.theme_btn = ctk.CTkButton(
