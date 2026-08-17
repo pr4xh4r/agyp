@@ -89,10 +89,41 @@ _NERD_FONTS = detect_icon_support()
 ICON_SUN   = "\U000f0599" if _NERD_FONTS else "\u2600"
 ICON_MOON  = "\U000f0594" if _NERD_FONTS else "\u263d"
 ICON_CLOSE = "\U000f0156" if _NERD_FONTS else "\u2715"
+ICON_GEAR  = "\U000f04fc" if _NERD_FONTS else "\u2699"
+
+import json
+
+CONFIG_FILE = AGY_ACCOUNTS_DIR / "config.json"
+
+def get_custom_ide_path():
+    try:
+        if CONFIG_FILE.exists():
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            return data.get("custom_ide_path")
+    except Exception:
+        pass
+    return None
+
+def set_custom_ide_path(path):
+    try:
+        data = {}
+        if CONFIG_FILE.exists():
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        if path:
+            data["custom_ide_path"] = path
+        else:
+            data.pop("custom_ide_path", None)
+        CONFIG_FILE.write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _find_linux_cmd():
     """Find the Antigravity desktop binary on Linux."""
+    custom = get_custom_ide_path()
+    if custom and os.path.isfile(custom) and os.access(custom, os.X_OK):
+        return custom
+
     candidates = [
         "antigravity",
         "Antigravity",
@@ -113,6 +144,10 @@ def _find_linux_cmd():
 
 def _find_windows_exe():
     """Find the Antigravity desktop binary on Windows."""
+    custom = get_custom_ide_path()
+    if custom and os.path.isfile(custom):
+        return custom
+
     candidates = [
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe"),
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\antigravity-ide\Antigravity IDE.exe"),
@@ -233,6 +268,15 @@ class App(ctk.CTk):
         self.icons_frame.grid(row=0, column=2, sticky="e")
 
         _icon_font_family = "JetBrainsMono Nerd Font" if _NERD_FONTS else MONO_FONT
+        self.settings_btn = ctk.CTkButton(
+            self.icons_frame, text=ICON_GEAR, width=36, height=36, corner_radius=18,
+            fg_color=ELEM_BG, text_color=TEXT_MAIN,
+            hover_color=ELEM_HOVER,
+            font=ctk.CTkFont(family=_icon_font_family, size=20),
+            command=self._prompt_for_custom_path
+        )
+        self.settings_btn.pack(side="left", padx=5)
+
         self.theme_btn = ctk.CTkButton(
             self.icons_frame, text=ICON_SUN, width=36, height=36, corner_radius=18,
             fg_color=ELEM_BG, text_color=TEXT_MAIN,
@@ -459,6 +503,26 @@ class App(ctk.CTk):
     # Launch logic
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _prompt_for_custom_path(self):
+        import tkinter.filedialog as fd
+        
+        filetypes = []
+        if sys.platform == "win32":
+            filetypes = [("Executable", "*.exe")]
+        elif sys.platform == "darwin":
+            filetypes = [("Application Bundle", "*.app")]
+        else:
+            filetypes = [("Executable", "*")]
+            
+        path = fd.askopenfilename(title="Locate Antigravity Desktop App", filetypes=filetypes)
+        if path:
+            set_custom_ide_path(path)
+            self.show_info(f"Custom path saved:\n{path}")
+        else:
+            # If they cancel, they might just want to reset it
+            set_custom_ide_path(None)
+            self.show_info("Custom path reset to default.")
+
     def do_launch(self, profile_name):
         profile_dir = AGY_ACCOUNTS_DIR / profile_name
         profile_dir.mkdir(exist_ok=True)
@@ -474,11 +538,11 @@ class App(ctk.CTk):
         if sys.platform == "darwin":
             # macOS: `open` returns immediately — show Save Credentials button
             try:
-                result = subprocess.run(
-                    ["open", "-n", "-a", "Antigravity"], capture_output=True
-                )
+                custom = get_custom_ide_path()
+                cmd = ["open", "-n", "-a", custom] if custom else ["open", "-n", "-a", "Antigravity"]
+                result = subprocess.run(cmd, capture_output=True)
                 if result.returncode != 0:
-                    self.show_error("Could not find 'Antigravity' in Applications.")
+                    self.show_error("Antigravity not found. Click the \u2699 (Gear) icon above to locate it.")
                     _clear_last_active()
                     return
             except Exception as e:
@@ -498,7 +562,7 @@ class App(ctk.CTk):
                     _clear_last_active()
             else:
                 _clear_last_active()
-                self.show_error("Antigravity not found. Please install the Desktop App.")
+                self.show_error("Antigravity not found. Click the \u2699 (Gear) icon above to locate it.")
 
         else:
             # Linux
@@ -515,8 +579,8 @@ class App(ctk.CTk):
                     self.show_error(f"Launch failed: {e}")
                     _clear_last_active()
             else:
-                self.show_error("Could not find 'antigravity' in your PATH.")
                 _clear_last_active()
+                self.show_error("Antigravity not found. Click the \u2699 (Gear) icon above to locate it.")
 
     def _monitor_process(self, proc, profile_name):
         """Watch process in background thread; save back tokens when it exits."""
