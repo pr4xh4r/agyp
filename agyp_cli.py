@@ -3,7 +3,11 @@ import os
 import sys
 import subprocess
 import shutil
+import pwd as _pwd
 from pathlib import Path
+
+# Always use the real system home — not the isolated session HOME Antigravity may set
+REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
 
 # Antigravity/Google Brand Colors (TrueColor ANSI)
 C_BLUE = "\033[38;2;66;133;244m"
@@ -146,7 +150,7 @@ def interactive_menu(profiles):
                         draw_header()
                         ans = input(f" {C_RED}Permanently delete '{p_to_delete}'? (y/N): {C_RESET}").strip().lower()
                         if ans == 'y':
-                            target = Path.home() / ".agyp-profiles" / p_to_delete
+                            target = REAL_HOME / ".agyp-profiles" / p_to_delete
                             if target.exists():
                                 shutil.rmtree(target)
                             profiles.remove(p_to_delete)
@@ -167,7 +171,7 @@ def interactive_menu(profiles):
 
 
 # The real OAuth token path that Antigravity CLI reads
-OAUTH_TOKEN_PATH = Path.home() / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+OAUTH_TOKEN_PATH = REAL_HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
 
 def launch_profile(profile, args):
     """Launch agy using the OAuth token stored for this profile.
@@ -176,7 +180,7 @@ def launch_profile(profile, args):
     /resume, settings — is shared and lives server-side, so it works perfectly
     across all profiles/accounts as expected.
     """
-    profile_dir = Path.home() / ".agyp-profiles" / profile
+    profile_dir = REAL_HOME / ".agyp-profiles" / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
     
     profile_token = profile_dir / "antigravity-oauth-token"
@@ -224,7 +228,7 @@ def launch_profile(profile, args):
 
 
 def main():
-    accounts_dir = Path.home() / ".agyp-profiles"
+    accounts_dir = REAL_HOME / ".agyp-profiles"
     
     if len(sys.argv) >= 2:
         argv_profile = sanitize_name(sys.argv[1])

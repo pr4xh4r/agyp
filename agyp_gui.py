@@ -17,7 +17,10 @@ import customtkinter as ctk
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-AGY_ACCOUNTS_DIR = Path.home() / ".agyp-profiles"
+import pwd as _pwd
+# Always use the real system home — not the isolated session HOME Antigravity may set
+REAL_HOME = Path(_pwd.getpwuid(os.getuid()).pw_dir)
+AGY_ACCOUNTS_DIR = REAL_HOME / ".agyp-profiles"
 TARGET_CMD = "antigravity"
 APP_TITLE = "Antigravity Profiles"
 AGY_BLUE = "#007AFF" # iOS Blue
@@ -282,7 +285,7 @@ class App(ctk.CTk):
         profile_dir.mkdir(exist_ok=True)
 
         # The single OAuth token file Antigravity reads for auth
-        oauth_path = Path.home() / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+        oauth_path = REAL_HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
         profile_token = profile_dir / "antigravity-oauth-token"
 
         # Swap in this profile's token if it exists
@@ -318,8 +321,8 @@ class App(ctk.CTk):
                 "antigravity-desktop",
                 "antigravity-bin",
                 "antigravity-ide",
-                str(Path.home() / ".local/share/antigravity-ide/bin/antigravity-ide"),
-                str(Path.home() / "Downloads/Antigravity/Antigravity-x64/antigravity")
+                str(REAL_HOME / ".local/share/antigravity-ide/bin/antigravity-ide"),
+                str(REAL_HOME / "Downloads/Antigravity/Antigravity-x64/antigravity")
             ]
             valid_cmd = None
             for c in linux_cmds:
