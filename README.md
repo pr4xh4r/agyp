@@ -1,43 +1,215 @@
-# Antigravity Profiles Suite (AGYP)
+<div align="center">
 
-A cross-platform manager for isolated Antigravity environments. Supports Windows, macOS, and Linux.
+```
+       ▄▀▀▄
+      ▀▀▀▀▀▀
+     ▀▀▀▀▀▀▀▀     Antigravity Profiles Suite
+    ▄▀▀    ▀▀▄
+   ▄▀▀      ▀▀▄
+```
 
-## 🐧 Linux & 🍏 macOS
+# Antigravity Profiles Suite
 
-### Installation
-Open your terminal and run the included bash script:
+**Manage multiple isolated Antigravity profiles — with a beautiful GUI or a blazing-fast CLI.**  
+Keep your work, personal, and client sessions completely separate. Never lose a conversation again.
+
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)](#installation)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://python.org)
+[![License](https://img.shields.io/badge/license-MIT-green)](#license)
+
+</div>
+
+---
+
+## Why Use This?
+
+Every Antigravity profile is a **fully isolated environment**. Each one has its own:
+
+- 📜 **Conversation history** — your `/resume` conversations are safe and never mixed
+- ⚙️ **Settings & preferences** — model selection, theme, tool policies per profile
+- 📁 **Projects & workspaces** — separate project lists for each context
+- 🔌 **Skills, Rules & MCP servers** — custom configs stay where they belong
+- 🗂️ **Scheduled tasks** — your cron jobs and timers don't bleed across profiles
+
+### Real-world use cases
+
+| Profile | What it's for |
+|---|---|
+| `work` | Your main job — history, projects, and settings all in one place |
+| `personal` | Side projects, experiments, personal tasks |
+| `client-acme` | Dedicated session for a specific client — share nothing |
+| `testing` | Try new models, risky settings, or destructive commands safely |
+| `fresh` | Always a clean slate — no history, no baggage |
+
+---
+
+## The `/resume` Advantage
+
+One of Antigravity's most powerful features is `/resume` — it lets you pick up any past conversation exactly where you left off. With profiles, this becomes even more powerful:
+
+```
+# Inside your "work" profile
+/resume  →  shows ONLY your work conversations
+
+# Inside your "client-acme" profile
+/resume  →  shows ONLY that client's conversations
+```
+
+**Your history is never lost.** Each profile stores its own conversation database independently. You can always go back to any profile and `/resume` exactly where you left off — days, weeks, or months later.
+
+---
+
+## Installation
+
+### Linux
+
 ```bash
+git clone https://github.com/yourusername/agyp-suite.git
+cd agyp-suite
 bash install.sh
 ```
-This automatically sets up a virtual environment, installs the UI framework, and links the commands globally to `~/.local/bin`.
 
-### Usage
-After installation, you can launch the tools from anywhere:
-- **CLI Mode:** Type `agyp` or `agyp-cli` in your terminal.
-- **GUI Mode:** Type `agyp-gui` in your terminal, or search for "Antigravity Profile Manager" in your application launcher.
+The installer automatically:
+- Detects your Python environment (including Arch Linux / Debian 12 managed Python)
+- Installs `customtkinter` for the GUI
+- Creates `agyp-cli`, `agyp-gui` commands in `~/.local/bin/`
+- Adds a desktop shortcut to your app launcher
+- Creates `~/.agyp-profiles/` for your profile data
 
----
+### macOS
 
-## 🪟 Windows
-
-### Installation
-1. Ensure you have **Python 3** installed and added to your system PATH.
-2. Double-click the `install.bat` file in this folder, or run it from Command Prompt:
-```cmd
-install.bat
+```bash
+git clone https://github.com/yourusername/agyp-suite.git
+cd agyp-suite
+bash install_mac.sh
 ```
-This script will automatically set up the virtual environment and install the required dependencies (like `customtkinter` for the GUI).
 
-### Usage
-On Windows, you can launch the tools by running the provided shortcut scripts in this directory:
-- **CLI Mode:** Double-click `run-cli.bat` (or type `python agyp_cli.py` in your terminal).
-- **GUI Mode:** Double-click `run-gui.bat` (or type `venv\Scripts\python.exe agyp_gui.py` in your terminal).
+Then add to your `~/.zshrc`:
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
 
-You can easily right-click `run-gui.bat` and select **"Send to > Desktop (create shortcut)"** to get a quick launcher on your Windows desktop!
+### Windows
+
+1. Double-click **`install.bat`**
+2. Use **`run-gui.bat`** to launch the GUI
+3. Use **`run-cli.bat`** to launch the CLI
+
+> **Requirements**: Python 3.8+ from [python.org](https://python.org)
 
 ---
 
-## Features
-- **Total Isolation**: Each profile creates a sandboxed `HOME` directory under `~/.agy_accounts/`.
-- **Zero Configuration**: No complex dependency hell. The CLI uses 100% standard Python libraries, and the GUI safely contains its dependencies in an isolated virtual environment.
-- **Cross-Platform Compatibility**: Native keyboard handling and window spawning tailored for Windows, Mac, and Linux.
+## Usage
+
+### GUI — `agyp-gui`
+
+Launch from terminal or your app launcher:
+
+```bash
+agyp-gui
+```
+
+**What you can do:**
+- **Select a profile** from the list and click **Launch** to open Antigravity bound to that profile
+- **Add Profile** — type a name and press Enter or click the green button
+- **Delete Profile** — select a profile and click Delete; confirms inline before removing anything
+- **Toggle theme** — click the ☀ / ☽ circular button in the top right
+- **Close** — click ✕ or press Cmd+W (macOS) / Alt+F4 (Windows)
+
+### CLI — `agyp` or `agyp-cli`
+
+Launch the interactive menu:
+
+```bash
+agyp
+```
+
+Or launch a specific profile directly (great for scripts and shortcuts):
+
+```bash
+agyp work
+agyp personal
+agyp client-acme
+```
+
+**Keyboard controls:**
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Navigate the menu |
+| `Enter` | Select / confirm |
+| `Ctrl+C` | Exit cleanly |
+
+---
+
+## How Profile Isolation Works
+
+Each profile is stored as a directory under `~/.agyp-profiles/`:
+
+```
+~/.agyp-profiles/
+├── work/           ← All "work" data lives here
+│   ├── .config/
+│   ├── .local/
+│   └── ...
+├── personal/
+└── client-acme/
+```
+
+When you launch a profile, the suite sets the Antigravity app's `--user-data-dir` to point exclusively at that profile's folder. The app sees it as a completely fresh, isolated home. **No data ever leaks between profiles.**
+
+---
+
+## Project Structure
+
+```
+agyp-suite/
+├── agyp_cli.py        # TUI — interactive arrow-key menu, cross-platform
+├── agyp_gui.py        # GUI — iOS-inspired dark/light mode interface
+├── install.sh         # Linux installer (handles Arch, Ubuntu, Fedora, Debian...)
+├── install_mac.sh     # macOS installer
+├── install.bat        # Windows installer
+├── run-cli.bat        # Windows CLI launcher
+└── run-gui.bat        # Windows GUI launcher
+```
+
+---
+
+## Features at a Glance
+
+| Feature | CLI | GUI |
+|---|---|---|
+| Create / delete profiles | ✅ | ✅ |
+| Launch isolated Antigravity session | ✅ | ✅ |
+| Dark / Light mode | — | ✅ |
+| Profile name sanitization (security) | ✅ | ✅ |
+| Works without Nerd Font installed | ✅ | ✅ |
+| macOS native close (red dot + Cmd+W) | — | ✅ |
+| Headless / SSH safe | ✅ | ✅ |
+| No data leaks between profiles | ✅ | ✅ |
+
+---
+
+## Requirements
+
+| | Minimum |
+|---|---|
+| Python | 3.8+ |
+| Antigravity | Any version with `--user-data-dir` support |
+| GUI dependency | `customtkinter` (auto-installed) |
+| Font (optional) | JetBrainsMono Nerd Font — for sharp icons in GUI |
+
+---
+
+## Contributing
+
+Pull requests are welcome. Please:
+- Keep the CLI and GUI in sync for all features
+- Test on at least one of Linux / macOS / Windows before submitting
+- Do not hardcode paths — use `Path.home()` and relative script paths
+
+---
+
+## License
+
+MIT — do whatever you want, just keep the attribution.
