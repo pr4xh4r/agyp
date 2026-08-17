@@ -115,15 +115,21 @@ def _find_windows_exe():
     """Find the Antigravity desktop binary on Windows."""
     candidates = [
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\antigravity-ide\Antigravity IDE.exe"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Programs\antigravity-ide\antigravity-ide.exe"),
         os.path.expandvars(r"%PROGRAMFILES%\Antigravity\Antigravity.exe"),
+        os.path.expandvars(r"%PROGRAMFILES%\Antigravity IDE\Antigravity IDE.exe"),
         os.path.expandvars(r"%PROGRAMFILES(x86)%\Antigravity\Antigravity.exe"),
     ]
     for c in candidates:
         if os.path.isfile(c):
             return c
-    found = shutil.which("Antigravity.exe") or shutil.which("antigravity")
-    if found:
-        return found
+    
+    # Try searching the PATH
+    for name in ["Antigravity.exe", "antigravity", "Antigravity IDE.exe", "antigravity-ide.exe", "antigravity-ide"]:
+        found = shutil.which(name)
+        if found:
+            return found
     return None
 
 
