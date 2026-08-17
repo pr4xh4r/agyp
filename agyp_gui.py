@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Antigravity Desktop Manager
-A strict CLI-inspired, terminal-aesthetic GUI manager for the Antigravity Desktop App.
-Built with customtkinter.
+An iOS-inspired, minimalist GUI manager for the Antigravity Desktop App.
+Built with customtkinter with automatic Dark/Light mode switching.
 """
 import os
 import sys
@@ -19,11 +19,7 @@ ctk.set_default_color_theme("blue")
 AGY_ACCOUNTS_DIR = Path.home() / ".agy_accounts"
 TARGET_CMD = "antigravity"
 APP_TITLE = "Antigravity Profiles"
-AGY_BLUE = "#007AFF" # Keep the blue for highlights
-
-# Terminal Aesthetic settings
-TERM_FONT = "JetBrainsMono Nerd Font"
-RADIUS = 4 # Sharp, slight rounding
+AGY_BLUE = "#007AFF" # iOS Blue
 
 class App(ctk.CTk):
     def __init__(self):
@@ -39,23 +35,22 @@ class App(ctk.CTk):
         # Header Frame
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.header_frame.grid(row=0, column=0, pady=(30, 15), padx=30, sticky="ew")
-        
         # Logo (Single string for native line spacing)
         logo_text = "       ▄▀▀▄       \n      ▀▀▀▀▀▀      \n     ▀▀▀▀▀▀▀▀     \n    ▄▀▀    ▀▀▄    \n   ▄▀▀      ▀▀▄   "
         self.lbl_logo = ctk.CTkLabel(
             self.header_frame,
             text=logo_text,
-            font=ctk.CTkFont(family=TERM_FONT, size=14, weight="bold"),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=14, weight="bold"),
             text_color=AGY_BLUE,
             justify="left"
         )
         self.lbl_logo.grid(row=0, column=0, sticky="w")
-            
-        # Title (Automatically centered vertically relative to the logo block)
+        
+        # Logo/Title
         self.lbl_title = ctk.CTkLabel(
             self.header_frame, 
             text="Antigravity Profiles (BETA)", 
-            font=ctk.CTkFont(family=TERM_FONT, size=24, weight="bold"),
+            font=ctk.CTkFont(family="San Francisco", size=24, weight="bold"),
             text_color=("black", "white")
         )
         self.lbl_title.grid(row=0, column=1, sticky="w", padx=10)
@@ -69,16 +64,14 @@ class App(ctk.CTk):
         # Theme Icon Toggle
         self.theme_btn = ctk.CTkButton(
             self.icons_frame,
-            text="[ ☀ ]",
-            width=50,
-            height=35,
-            corner_radius=RADIUS,
+            text="☀",
+            width=30,
+            height=30,
+            corner_radius=15,
             fg_color="transparent",
-            border_width=2,
-            border_color=("gray70", "gray40"),
             text_color=("black", "white"),
             hover_color=("gray85", "gray20"),
-            font=ctk.CTkFont(family=TERM_FONT, size=14, weight="bold"),
+            font=ctk.CTkFont(size=20),
             command=self.toggle_theme
         )
         self.theme_btn.pack(side="left", padx=5)
@@ -86,22 +79,20 @@ class App(ctk.CTk):
         # Close Window Icon
         self.close_btn = ctk.CTkButton(
             self.icons_frame,
-            text="[ X ]",
-            width=50,
-            height=35,
-            corner_radius=RADIUS,
+            text="✕",
+            width=30,
+            height=30,
+            corner_radius=15,
             fg_color="transparent",
-            border_width=2,
-            border_color=("gray70", "gray40"),
             text_color=("black", "white"),
-            hover_color="#FF3B30", # Red on hover
-            font=ctk.CTkFont(family=TERM_FONT, size=14, weight="bold"),
+            hover_color="#FF3B30", # iOS Red on hover
+            font=ctk.CTkFont(size=20, weight="bold"),
             command=self.destroy
         )
         self.close_btn.pack(side="left")
         
-        # Profile List Frame (Terminal style block)
-        self.list_frame = ctk.CTkFrame(self, fg_color=("gray95", "gray12"), corner_radius=RADIUS, border_width=1, border_color=("gray80", "gray20"))
+        # Profile List Frame (iOS style card)
+        self.list_frame = ctk.CTkFrame(self, fg_color=("gray95", "gray12"), corner_radius=20)
         self.list_frame.grid(row=1, column=0, padx=30, pady=10, sticky="nsew")
         self.list_frame.grid_columnconfigure(0, weight=1)
         self.list_frame.grid_rowconfigure(0, weight=1)
@@ -121,13 +112,13 @@ class App(ctk.CTk):
         
         self.btn_launch = ctk.CTkButton(
             self.action_frame, 
-            text="[>] Launch", 
-            font=ctk.CTkFont(family=TERM_FONT, size=15, weight="bold"),
+            text="Launch", 
+            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
             fg_color=AGY_BLUE,
             hover_color="#005bb5",
             text_color="white",
-            corner_radius=RADIUS,
-            height=45,
+            corner_radius=25,
+            height=50,
             command=self.launch_profile,
             state="disabled"
         )
@@ -135,15 +126,15 @@ class App(ctk.CTk):
         
         self.btn_delete = ctk.CTkButton(
             self.action_frame, 
-            text="[-] Delete", 
-            font=ctk.CTkFont(family=TERM_FONT, size=15, weight="bold"),
+            text="Delete", 
+            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
             fg_color="transparent", 
             border_width=2,
             border_color="#FF3B30",
             text_color="#FF3B30",
             hover_color="gray15",
-            corner_radius=RADIUS,
-            height=45,
+            corner_radius=25,
+            height=50,
             command=self.delete_profile,
             state="disabled"
         )
@@ -157,26 +148,26 @@ class App(ctk.CTk):
         self.entry_new = ctk.CTkEntry(
             self.new_frame, 
             placeholder_text="New profile name...",
-            font=ctk.CTkFont(family=TERM_FONT, size=15),
-            height=45,
-            corner_radius=RADIUS,
+            font=ctk.CTkFont(family="San Francisco", size=16),
+            height=50,
+            corner_radius=25,
             fg_color=("white", "gray16"),
-            border_width=2,
-            border_color=("gray70", "gray30")
+            border_width=1,
+            border_color=("gray80", "gray25")
         )
         self.entry_new.grid(row=0, column=0, padx=(0, 10), sticky="ew")
         self.entry_new.bind("<Return>", lambda e: self.create_profile())
         
         self.btn_add = ctk.CTkButton(
             self.new_frame, 
-            text="[+] Add Profile", 
-            font=ctk.CTkFont(family=TERM_FONT, size=15, weight="bold"),
-            fg_color="#34C759", # Green
+            text="Add Profile", 
+            font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
+            fg_color="#34C759", # iOS Green
             hover_color="#248a3d",
             text_color="white",
-            width=160,
-            height=45,
-            corner_radius=RADIUS,
+            width=140,
+            height=50,
+            corner_radius=25,
             command=self.create_profile
         )
         self.btn_add.grid(row=0, column=1)
@@ -186,16 +177,12 @@ class App(ctk.CTk):
     def toggle_theme(self):
         if ctk.get_appearance_mode() == "Dark":
             ctk.set_appearance_mode("Light")
-            self.theme_btn.configure(text="[ ☾ ]")
+            self.theme_btn.configure(text="☾")
             self.btn_delete.configure(hover_color="gray90")
-            if hasattr(self, 'btn_cancel_del') and self.btn_cancel_del.winfo_exists():
-                self.btn_cancel_del.configure(hover_color="gray90")
         else:
             ctk.set_appearance_mode("Dark")
-            self.theme_btn.configure(text="[ ☀ ]")
+            self.theme_btn.configure(text="☀")
             self.btn_delete.configure(hover_color="gray15")
-            if hasattr(self, 'btn_cancel_del') and self.btn_cancel_del.winfo_exists():
-                self.btn_cancel_del.configure(hover_color="gray15")
             
     def get_profiles(self):
         if not AGY_ACCOUNTS_DIR.exists():
@@ -209,13 +196,12 @@ class App(ctk.CTk):
         if hasattr(self, 'cancel_delete'):
             self.cancel_delete()
             
-        # Update styling for list
+        # Update styling for iOS list style
         for btn in self.profile_buttons:
-            if btn.cget("text").endswith(profile_name):
-                btn.configure(fg_color=AGY_BLUE, text_color="white", text=f"❯ {profile_name}")
+            if btn.cget("text") == profile_name:
+                btn.configure(fg_color=AGY_BLUE, text_color="white")
             else:
-                raw_name = btn.cget("text").replace("❯ ", "")
-                btn.configure(fg_color="transparent", text_color=("black", "gray90"), text=f"  {raw_name}")
+                btn.configure(fg_color="transparent", text_color=("black", "gray90"))
         
         # Enable action buttons
         self.btn_launch.configure(state="normal")
@@ -233,22 +219,22 @@ class App(ctk.CTk):
         profiles = self.get_profiles()
         
         if not profiles:
-            lbl = ctk.CTkLabel(self.scrollable_list, text="  (No profiles exist yet)", font=ctk.CTkFont(family=TERM_FONT, size=15), text_color=("gray50", "gray60"))
-            lbl.grid(row=0, column=0, pady=20, sticky="w")
+            lbl = ctk.CTkLabel(self.scrollable_list, text="No profiles exist yet", font=ctk.CTkFont(size=15), text_color=("gray50", "gray60"))
+            lbl.grid(row=0, column=0, pady=20)
             self.profile_buttons.append(lbl)
             return
 
         for i, p in enumerate(profiles):
             btn = ctk.CTkButton(
                 self.scrollable_list,
-                text=f"  {p}",
+                text=p,
                 fg_color="transparent",
                 text_color=("black", "gray90"),
                 hover_color=("gray85", "gray20"),
                 anchor="w",
-                corner_radius=RADIUS,
-                font=ctk.CTkFont(family=TERM_FONT, size=15, weight="bold"),
-                height=40,
+                corner_radius=10,
+                font=ctk.CTkFont(family="San Francisco", size=16),
+                height=45,
                 command=lambda name=p: self.on_profile_select(name)
             )
             btn.grid(row=i, column=0, sticky="ew", pady=2)
@@ -274,9 +260,9 @@ class App(ctk.CTk):
             dialog.geometry("300x150")
             dialog.transient(self)
             dialog.grab_set()
-            lbl = ctk.CTkLabel(dialog, text=f"Could not find '{TARGET_CMD}'\non your system.", font=ctk.CTkFont(family=TERM_FONT, size=14), text_color="#FF3B30")
+            lbl = ctk.CTkLabel(dialog, text=f"Could not find '{TARGET_CMD}'\non your system.", text_color="#FF3B30")
             lbl.pack(pady=20)
-            btn = ctk.CTkButton(dialog, text="OK", font=ctk.CTkFont(family=TERM_FONT, size=14), corner_radius=RADIUS, command=dialog.destroy)
+            btn = ctk.CTkButton(dialog, text="OK", command=dialog.destroy)
             btn.pack()
 
     def launch_profile(self):
@@ -302,28 +288,28 @@ class App(ctk.CTk):
         # Show inline confirmation buttons
         self.btn_confirm = ctk.CTkButton(
             self.action_frame,
-            text=f"[-] Confirm Delete '{p}'?",
-            font=ctk.CTkFont(family=TERM_FONT, size=14, weight="bold"),
+            text=f"Confirm Delete '{p}'?",
+            font=ctk.CTkFont(family="San Francisco", size=15, weight="bold"),
             fg_color="#FF3B30",
             hover_color="#c92a22",
             text_color="white",
-            corner_radius=RADIUS,
-            height=45,
+            corner_radius=25,
+            height=50,
             command=self.execute_delete
         )
         self.btn_confirm.grid(row=0, column=0, padx=(0, 5), sticky="ew")
         
         self.btn_cancel_del = ctk.CTkButton(
             self.action_frame,
-            text="[x] Cancel",
-            font=ctk.CTkFont(family=TERM_FONT, size=14, weight="bold"),
+            text="Cancel",
+            font=ctk.CTkFont(family="San Francisco", size=15, weight="bold"),
             fg_color="transparent",
             border_width=2,
             border_color=("gray70", "gray40"),
             text_color=("black", "white"),
-            hover_color=("gray85", "gray20") if ctk.get_appearance_mode() == "Dark" else ("gray90", "gray90"),
-            corner_radius=RADIUS,
-            height=45,
+            hover_color=("gray85", "gray25"),
+            corner_radius=25,
+            height=50,
             command=self.cancel_delete
         )
         self.btn_cancel_del.grid(row=0, column=1, padx=(5, 0), sticky="ew")
