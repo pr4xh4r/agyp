@@ -291,16 +291,20 @@ def launch_profile(profile, args):
             CONFIG_FILE.write_text(json.dumps(data), encoding="utf-8")
         except: pass
 
-    cmd_path = get_custom_cli() or shutil.which("agy")
+    # Find the agy command — prefer custom path, fall back to PATH search
+    _custom = get_custom_cli()
+    if _custom and os.path.isfile(_custom):
+        cmd_path = _custom
+    else:
+        cmd_path = shutil.which("agy") or shutil.which("agy.exe") or shutil.which("agy.cmd")
 
     # Verify CLI exists before trying to run it
-    if not cmd_path or not os.path.isfile(cmd_path):
+    if not cmd_path:
         print(f"{C_RED}Error: 'agy' command not found in your PATH.{C_RESET}")
         print(f"{C_YELLOW}If you have installed the Antigravity CLI in a custom location,")
         ans = input(f"would you like to provide the absolute path to it now? [y/N]: {C_RESET}")
         if ans.lower().startswith('y'):
             custom_path = input(f"{C_WHITE}Enter absolute path to 'agy' executable: {C_RESET}").strip()
-            # Strip quotes if they dragged and dropped a file in the terminal
             custom_path = custom_path.strip('"').strip("'")
             if os.path.isfile(custom_path):
                 set_custom_cli(custom_path)
@@ -314,8 +318,10 @@ def launch_profile(profile, args):
             clear_last_active()
             sys.exit(1)
 
+    # On Windows: .bat/.cmd files need shell=True, .exe files do not
+    use_shell = sys.platform == "win32" and not str(cmd_path).lower().endswith(".exe")
     try:
-        ret = subprocess.call([cmd_path] + args, shell=(sys.platform == "win32" and not cmd_path.endswith('.exe')))
+        ret = subprocess.call([cmd_path] + args, shell=use_shell)
     except FileNotFoundError:
         print(f"{C_RED}Error: '{cmd_path}' not found or not executable.{C_RESET}")
         sys.exit(1)
