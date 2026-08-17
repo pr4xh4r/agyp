@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Antigravity Desktop Manager
-A robust, cross-platform GUI manager for the Antigravity Desktop App.
-Built with standard tkinter (ttk) to guarantee 100% zero-dependency support on Linux, Mac, and Windows.
+A simple, minimalist GUI manager for the Antigravity Desktop App.
+Built with standard tkinter (ttk).
 """
 import os
 import sys
@@ -10,76 +10,62 @@ import shutil
 import subprocess
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, messagebox
 
 AGY_ACCOUNTS_DIR = Path.home() / ".agy_accounts"
 TARGET_CMD = "antigravity"
-APP_TITLE = "Antigravity Desktop Manager"
+APP_TITLE = "Antigravity Profiles"
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("550x500")
+        self.geometry("400x450")
         self.resizable(False, False)
         
-        # Try to use a modern theme if available
         style = ttk.Style(self)
-        available_themes = style.theme_names()
-        if "clam" in available_themes:
+        if "clam" in style.theme_names():
             style.theme_use("clam")
-        elif "vista" in available_themes:
-            style.theme_use("vista")
             
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         
         # Header
-        header = ttk.Label(self, text=APP_TITLE, font=("Helvetica", 18, "bold"))
+        header = tk.Label(self, text=APP_TITLE, font=("Helvetica", 18, "bold"), fg="#4285F4")
         header.grid(row=0, column=0, pady=20)
         
         # Profile List
-        list_frame = ttk.LabelFrame(self, text="Select an existing profile:")
-        list_frame.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
+        list_frame = ttk.Frame(self)
+        list_frame.grid(row=1, column=0, padx=30, pady=10, sticky="nsew")
         
-        # Scrollbar for listbox
         scrollbar = ttk.Scrollbar(list_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=("Helvetica", 11))
-        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set, font=("Helvetica", 12), selectbackground="#4285F4", selectforeground="white")
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.listbox.bind("<Double-1>", lambda e: self.launch_profile())
         scrollbar.config(command=self.listbox.yview)
         
-        # Controls Frame
-        control_frame = ttk.Frame(self)
-        control_frame.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
+        # Action Buttons
+        btn_frame = ttk.Frame(self)
+        btn_frame.grid(row=2, column=0, padx=30, pady=10, sticky="ew")
         
-        # Control Buttons
-        btn_launch = ttk.Button(control_frame, text="🚀 Launch", command=self.launch_profile)
+        btn_launch = tk.Button(btn_frame, text="Launch Profile", bg="#4285F4", fg="white", font=("Helvetica", 11, "bold"), relief="flat", command=self.launch_profile)
         btn_launch.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
         
-        btn_shortcut = ttk.Button(control_frame, text="💻 Shortcut", command=self.create_shortcut)
-        btn_shortcut.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        
-        btn_export = ttk.Button(control_frame, text="📦 Export", command=self.export_profile)
-        btn_export.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
-        
-        btn_delete = ttk.Button(control_frame, text="🗑️ Delete", command=self.delete_profile)
-        btn_delete.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        btn_delete = tk.Button(btn_frame, text="Delete", bg="#EA4335", fg="white", font=("Helvetica", 11, "bold"), relief="flat", command=self.delete_profile)
+        btn_delete.pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=2)
         
         # New Profile Frame
-        new_frame = ttk.LabelFrame(self, text="Create or Import Profile:")
-        new_frame.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+        new_frame = ttk.Frame(self)
+        new_frame.grid(row=3, column=0, padx=30, pady=20, sticky="ew")
         
-        self.entry_new = ttk.Entry(new_frame, font=("Helvetica", 11))
-        self.entry_new.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=10)
+        self.entry_new = ttk.Entry(new_frame, font=("Helvetica", 12))
+        self.entry_new.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         self.entry_new.bind("<Return>", lambda e: self.create_profile())
         
-        btn_new = ttk.Button(new_frame, text="Create & Launch", command=self.create_profile)
-        btn_new.pack(side=tk.LEFT, padx=5)
-        
-        btn_import = ttk.Button(new_frame, text="Import Zip", command=self.import_profile)
-        btn_import.pack(side=tk.LEFT, padx=10)
+        btn_new = tk.Button(new_frame, text="Add Profile", bg="#34A853", fg="white", font=("Helvetica", 11, "bold"), relief="flat", command=self.create_profile)
+        btn_new.pack(side=tk.RIGHT)
         
         self.refresh_list()
         
@@ -90,8 +76,7 @@ class App(tk.Tk):
 
     def refresh_list(self):
         self.listbox.delete(0, tk.END)
-        profiles = self.get_profiles()
-        for p in profiles:
+        for p in self.get_profiles():
             self.listbox.insert(tk.END, p)
 
     def get_selected(self):
@@ -101,24 +86,12 @@ class App(tk.Tk):
             return None
         return self.listbox.get(selection[0])
 
-    def load_env(self, profile_dir):
-        env_file = profile_dir / ".env"
-        env = os.environ.copy()
-        env["HOME"] = str(profile_dir)
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, val = line.split("=", 1)
-                    env[key.strip()] = val.strip()
-        else:
-            env_file.write_text("# Add environment variables here (e.g. API_KEY=value)\n")
-        return env
-
     def do_launch(self, profile_name):
         profile_dir = AGY_ACCOUNTS_DIR / profile_name
         profile_dir.mkdir(exist_ok=True)
-        env = self.load_env(profile_dir)
+        
+        env = os.environ.copy()
+        env["HOME"] = str(profile_dir)
         
         try:
             if sys.platform == "darwin":
@@ -142,46 +115,6 @@ class App(tk.Tk):
             self.refresh_list()
         else:
             messagebox.showwarning("Warning", "Profile name cannot be empty!")
-
-    def create_shortcut(self):
-        p = self.get_selected()
-        if not p: return
-        desktop = Path.home() / "Desktop"
-        
-        if sys.platform == "linux":
-            s = desktop / f"Antigravity ({p}).desktop"
-            cmd = f"env HOME='{AGY_ACCOUNTS_DIR/p}' {TARGET_CMD}"
-            s.write_text(f"[Desktop Entry]\nName=Antigravity ({p})\nExec={cmd}\nType=Application\nTerminal=false\nCategories=Development;\n")
-            s.chmod(0o755)
-        elif sys.platform == "win32":
-            s = desktop / f"Antigravity ({p}).bat"
-            s.write_text(f"@echo off\nset HOME={AGY_ACCOUNTS_DIR/p}\nstart \"\" {TARGET_CMD}\n")
-        elif sys.platform == "darwin":
-            s = desktop / f"Antigravity ({p}).command"
-            s.write_text(f"#!/bin/bash\nexport HOME='{AGY_ACCOUNTS_DIR/p}'\nopen -a {TARGET_CMD}\n")
-            s.chmod(0o755)
-            
-        messagebox.showinfo("Success", f"Shortcut created on your Desktop for '{p}'!")
-
-    def export_profile(self):
-        p = self.get_selected()
-        if not p: return
-        f = filedialog.asksaveasfilename(defaultextension=".zip", initialfile=f"{p}_backup.zip")
-        if f:
-            shutil.make_archive(f.replace('.zip', ''), 'zip', AGY_ACCOUNTS_DIR / p)
-            messagebox.showinfo("Success", "Profile exported successfully!")
-
-    def import_profile(self):
-        f = filedialog.askopenfilename(filetypes=[("Zip files", "*.zip")])
-        if f:
-            name = Path(f).stem.replace("_backup", "")
-            target = AGY_ACCOUNTS_DIR / name
-            if target.exists():
-                name = name + "_imported"
-                target = AGY_ACCOUNTS_DIR / name
-            shutil.unpack_archive(f, target)
-            self.refresh_list()
-            messagebox.showinfo("Success", f"Profile imported as {name}!")
 
     def delete_profile(self):
         p = self.get_selected()
