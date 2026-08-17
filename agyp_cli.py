@@ -248,16 +248,52 @@ def launch_profile(profile, args):
 
     set_last_active(profile)
 
+    import json
+    CONFIG_FILE = PROFILES_DIR / "config.json"
+    
+    def get_custom_cli():
+        try:
+            if CONFIG_FILE.exists():
+                return json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("custom_cli_path")
+        except: pass
+        return None
+
+    def set_custom_cli(path):
+        try:
+            data = {}
+            if CONFIG_FILE.exists():
+                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            data["custom_cli_path"] = path
+            CONFIG_FILE.write_text(json.dumps(data), encoding="utf-8")
+        except: pass
+
+    cmd_path = get_custom_cli() or shutil.which("agy")
+
     # Verify CLI exists before trying to run it
-    if not shutil.which("agy"):
-        print(f"{C_RED}Error: 'agy' command not found. Ensure Antigravity CLI is installed.{C_RESET}")
-        clear_last_active()
-        sys.exit(1)
+    if not cmd_path or not os.path.isfile(cmd_path):
+        print(f"{C_RED}Error: 'agy' command not found in your PATH.{C_RESET}")
+        print(f"{C_YELLOW}If you have installed the Antigravity CLI in a custom location,")
+        ans = input(f"would you like to provide the absolute path to it now? [y/N]: {C_RESET}")
+        if ans.lower().startswith('y'):
+            custom_path = input(f"{C_WHITE}Enter absolute path to 'agy' executable: {C_RESET}").strip()
+            # Strip quotes if they dragged and dropped a file in the terminal
+            custom_path = custom_path.strip('"').strip("'")
+            if os.path.isfile(custom_path):
+                set_custom_cli(custom_path)
+                cmd_path = custom_path
+                print(f"{C_GREEN}Path saved successfully! Launching...{C_RESET}\n")
+            else:
+                print(f"{C_RED}Invalid path. Please try again later.{C_RESET}")
+                clear_last_active()
+                sys.exit(1)
+        else:
+            clear_last_active()
+            sys.exit(1)
 
     try:
-        ret = subprocess.call(["agy"] + args, shell=(sys.platform == "win32"))
+        ret = subprocess.call([cmd_path] + args, shell=(sys.platform == "win32" and not cmd_path.endswith('.exe')))
     except FileNotFoundError:
-        print(f"{C_RED}Error: 'agy' command not found. Ensure Antigravity CLI is installed.{C_RESET}")
+        print(f"{C_RED}Error: '{cmd_path}' not found or not executable.{C_RESET}")
         sys.exit(1)
 
     save_back_profile(profile_dir)
