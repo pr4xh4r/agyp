@@ -251,21 +251,11 @@ class App(ctk.CTk):
         profile_dir = AGY_ACCOUNTS_DIR / profile_name
         profile_dir.mkdir(exist_ok=True)
         
-        env = os.environ.copy()
-        env["HOME"] = str(profile_dir)
-        env["USERPROFILE"] = str(profile_dir) # Windows isolation
-        
-        # Redirect XDG paths for Linux apps to ensure full Electron/GUI isolation
-        env["XDG_CONFIG_HOME"] = str(profile_dir / ".config")
-        env["XDG_DATA_HOME"] = str(profile_dir / ".local/share")
-        env["XDG_STATE_HOME"] = str(profile_dir / ".local/state")
-        env["XDG_CACHE_HOME"] = str(profile_dir / ".cache")
-        
         if sys.platform == "darwin":
             # macOS relies on the App bundle name
-            cmd = ["open", "-n", "-a", "Antigravity"]
+            cmd = ["open", "-n", "-a", "Antigravity", "--args", f"--user-data-dir={profile_dir}"]
             try:
-                result = subprocess.run(cmd, env=env, capture_output=True)
+                result = subprocess.run(cmd, capture_output=True)
                 if result.returncode != 0:
                     self.show_error("Could not find 'Antigravity' in Applications.")
             except Exception as e:
@@ -274,7 +264,7 @@ class App(ctk.CTk):
         elif sys.platform == "win32":
             # Windows shell execution
             try:
-                subprocess.Popen('start "" "antigravity"', env=env, shell=True)
+                subprocess.Popen(f'start "" "antigravity" --user-data-dir="{profile_dir}"', shell=True)
             except Exception as e:
                 self.show_error(f"Launch failed: {e}")
                 
@@ -300,7 +290,8 @@ class App(ctk.CTk):
             
             if valid_cmd:
                 try:
-                    subprocess.Popen([valid_cmd], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    # Pass the profile directory natively to the Electron app
+                    subprocess.Popen([valid_cmd, f"--user-data-dir={profile_dir}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception as e:
                     self.show_error(f"Launch failed: {e}")
             else:
