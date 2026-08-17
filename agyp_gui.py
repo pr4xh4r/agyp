@@ -35,20 +35,31 @@ class App(ctk.CTk):
         # Header Frame
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.header_frame.grid(row=0, column=0, pady=(30, 15), padx=30, sticky="ew")
-        self.header_frame.grid_columnconfigure(0, weight=1)
+        # ASCII Logo
+        logo_text = "    ▄▀▀▄\n   ▀▀▀▀▀▀\n  ▀▀▀▀▀▀▀▀\n ▄▀▀    ▀▀▄\n▄▀▀      ▀▀▄"
+        self.lbl_logo = ctk.CTkLabel(
+            self.header_frame,
+            text=logo_text,
+            font=ctk.CTkFont(family="Courier", size=14, weight="bold"),
+            text_color=AGY_BLUE,
+            justify="center"
+        )
+        self.lbl_logo.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 15))
         
-        # Logo/Title
+        # Title
         self.lbl_title = ctk.CTkLabel(
             self.header_frame, 
             text="Antigravity Profiles (BETA)", 
             font=ctk.CTkFont(family="San Francisco", size=24, weight="bold"),
             text_color=("black", "white")
         )
-        self.lbl_title.grid(row=0, column=0, rowspan=2, sticky="w")
+        self.lbl_title.grid(row=0, column=1, rowspan=2, sticky="w")
+        
+        self.header_frame.grid_columnconfigure(1, weight=1)
         
         # Action Icons Frame (Top Right)
         self.icons_frame = ctk.CTkFrame(self.header_frame, fg_color="transparent")
-        self.icons_frame.grid(row=0, column=1, rowspan=2, sticky="e")
+        self.icons_frame.grid(row=0, column=2, rowspan=2, sticky="e")
 
         # Theme Icon Toggle
         self.theme_btn = ctk.CTkButton(
