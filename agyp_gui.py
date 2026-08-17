@@ -280,30 +280,42 @@ class App(ctk.CTk):
     def do_launch(self, profile_name):
         profile_dir = AGY_ACCOUNTS_DIR / profile_name
         profile_dir.mkdir(exist_ok=True)
-        
+
+        # The single OAuth token file Antigravity reads for auth
+        oauth_path = Path.home() / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+        profile_token = profile_dir / "antigravity-oauth-token"
+
+        # Swap in this profile's token if it exists
+        if profile_token.exists():
+            try:
+                oauth_path.parent.mkdir(parents=True, exist_ok=True)
+                if oauth_path.exists():
+                    shutil.copy2(oauth_path, oauth_path.with_suffix(".agyp-backup"))
+                shutil.copy2(profile_token, oauth_path)
+            except Exception as e:
+                self.show_error(f"Token swap failed: {e}")
+                return
+
         if sys.platform == "darwin":
-            # macOS relies on the App bundle name
-            cmd = ["open", "-n", "-a", "Antigravity", "--args", f"--user-data-dir={profile_dir}"]
+            cmd = ["open", "-n", "-a", "Antigravity"]
             try:
                 result = subprocess.run(cmd, capture_output=True)
                 if result.returncode != 0:
                     self.show_error("Could not find 'Antigravity' in Applications.")
             except Exception as e:
                 self.show_error(f"Launch failed: {e}")
-                
+
         elif sys.platform == "win32":
-            # Windows shell execution
             try:
-                subprocess.Popen(f'start "" "antigravity" --user-data-dir="{profile_dir}"', shell=True)
+                subprocess.Popen('start "" "antigravity"', shell=True)
             except Exception as e:
                 self.show_error(f"Launch failed: {e}")
-                
+
         else:
-            # Linux: Search PATH and common local installation directories
             linux_cmds = [
-                "antigravity", 
-                "Antigravity", 
-                "antigravity-desktop", 
+                "antigravity",
+                "Antigravity",
+                "antigravity-desktop",
                 "antigravity-bin",
                 "antigravity-ide",
                 str(Path.home() / ".local/share/antigravity-ide/bin/antigravity-ide"),
@@ -317,15 +329,15 @@ class App(ctk.CTk):
                 elif os.path.isfile(c) and os.access(c, os.X_OK):
                     valid_cmd = c
                     break
-            
+
             if valid_cmd:
                 try:
-                    # Pass the profile directory natively to the Electron app
-                    subprocess.Popen([valid_cmd, f"--user-data-dir={profile_dir}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.Popen([valid_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception as e:
                     self.show_error(f"Launch failed: {e}")
             else:
                 self.show_error("Could not find 'antigravity' in your PATH.")
+
 
     def launch_profile(self):
         p = self.selected_profile.get()
