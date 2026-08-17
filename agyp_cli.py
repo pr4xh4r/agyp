@@ -164,67 +164,68 @@ def interactive_menu(profiles):
                 sys.stdout.write("\033[?25h")
                 sys.exit(0)
     finally:
-        sys.stdout.write("\033[?25h") # Show cursor
+        sys.stdout.write("\033[?25h")
         clear_screen()
-        
+
     return None
 
 
-# The real OAuth token path that Antigravity CLI reads
-OAUTH_TOKEN_PATH = REAL_HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+# Auth files — CLI token + Desktop App credentials
+OAUTH_TOKEN_PATH  = REAL_HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+DESKTOP_CREDS     = REAL_HOME / ".gemini" / "oauth_creds.json"
+DESKTOP_ACCOUNTS  = REAL_HOME / ".gemini" / "google_accounts.json"
+
+# All auth file pairs: (system path, filename saved in profile dir)
+AUTH_FILES = [
+    (OAUTH_TOKEN_PATH, "antigravity-oauth-token"),   # CLI
+    (DESKTOP_CREDS,    "oauth_creds.json"),           # Desktop App token
+    (DESKTOP_ACCOUNTS, "google_accounts.json"),       # Desktop App active account
+]
+
+def swap_in_profile(profile_dir):
+    """Copy this profile's saved auth files into the live system locations."""
+    import shutil
+    swapped = 0
+    for sys_path, filename in AUTH_FILES:
+        src = profile_dir / filename
+        if src.exists():
+            sys_path.parent.mkdir(parents=True, exist_ok=True)
+            if sys_path.exists():
+                shutil.copy2(sys_path, sys_path.with_suffix(".agyp-backup"))
+            shutil.copy2(src, sys_path)
+            swapped += 1
+    return swapped
+
+def save_back_profile(profile_dir):
+    """Copy current live auth files back into the profile dir (after session ends)."""
+    import shutil
+    for sys_path, filename in AUTH_FILES:
+        if sys_path.exists():
+            shutil.copy2(sys_path, profile_dir / filename)
 
 def launch_profile(profile, args):
-    """Launch agy using the OAuth token stored for this profile.
-    
-    Only the OAuth token file is swapped. Everything else — history, projects,
-    /resume, settings — is shared and lives server-side, so it works perfectly
-    across all profiles/accounts as expected.
-    """
+    """Switch to a profile (swaps CLI + Desktop App auth) then launches agy."""
     profile_dir = REAL_HOME / ".agyp-profiles" / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
-    
-    profile_token = profile_dir / "antigravity-oauth-token"
-    
+
     print(f"\n{C_BLUE}Switching to profile '{profile}'...{C_RESET}")
-    
-    # If this profile has a saved token, swap it in
-    if profile_token.exists():
-        import shutil
-        # Back up current token if it exists
-        if OAUTH_TOKEN_PATH.exists():
-            shutil.copy2(OAUTH_TOKEN_PATH, OAUTH_TOKEN_PATH.with_suffix(".agyp-backup"))
-        # Swap in this profile's token
-        OAUTH_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(profile_token, OAUTH_TOKEN_PATH)
-        print(f"{C_GREEN}Account loaded. Launching...{C_RESET}\n")
+
+    swapped = swap_in_profile(profile_dir)
+    if swapped > 0:
+        print(f"{C_GREEN}Account loaded ({swapped} auth file(s) swapped). Launching...{C_RESET}\n")
     else:
         print(f"{C_YELLOW}New profile — you will be asked to log in.{C_RESET}")
-        print(f"{C_GRAY}After logging in, your token is saved to this profile automatically.{C_RESET}\n")
+        print(f"{C_GRAY}After logging in, your credentials are saved to this profile automatically.{C_RESET}\n")
 
-    if sys.platform == "win32":
-        try:
-            ret = subprocess.call(["agy"] + args, shell=True)
-        except FileNotFoundError:
-            print(f"{C_RED}Error: 'agy' command not found. Ensure Antigravity CLI is installed.{C_RESET}")
-            sys.exit(1)
-        # Save the token back to the profile after session ends
-        if OAUTH_TOKEN_PATH.exists():
-            import shutil
-            shutil.copy2(OAUTH_TOKEN_PATH, profile_token)
-        sys.exit(ret)
-    else:
-        # For Unix: save token back using atexit before exec-replacing the process
-        # Since os.execvpe replaces the process, we wrap with a subprocess instead
-        try:
-            ret = subprocess.call(["agy"] + args)
-        except FileNotFoundError:
-            print(f"{C_RED}Error: 'agy' command not found. Ensure Antigravity CLI is installed.{C_RESET}")
-            sys.exit(1)
-        # Save the (possibly refreshed) token back into the profile
-        if OAUTH_TOKEN_PATH.exists():
-            import shutil
-            shutil.copy2(OAUTH_TOKEN_PATH, profile_token)
-        sys.exit(ret)
+    try:
+        ret = subprocess.call(["agy"] + args, shell=(sys.platform == "win32"))
+    except FileNotFoundError:
+        print(f"{C_RED}Error: 'agy' command not found. Ensure Antigravity CLI is installed.{C_RESET}")
+        sys.exit(1)
+
+    # Save all refreshed auth files back into the profile
+    save_back_profile(profile_dir)
+    sys.exit(ret)
 
 
 def main():

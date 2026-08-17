@@ -284,20 +284,25 @@ class App(ctk.CTk):
         profile_dir = AGY_ACCOUNTS_DIR / profile_name
         profile_dir.mkdir(exist_ok=True)
 
-        # The single OAuth token file Antigravity reads for auth
-        oauth_path = REAL_HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
-        profile_token = profile_dir / "antigravity-oauth-token"
+        # All auth files: CLI token + Desktop App credentials
+        auth_files = [
+            (REAL_HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token", "antigravity-oauth-token"),
+            (REAL_HOME / ".gemini" / "oauth_creds.json",    "oauth_creds.json"),
+            (REAL_HOME / ".gemini" / "google_accounts.json","google_accounts.json"),
+        ]
 
-        # Swap in this profile's token if it exists
-        if profile_token.exists():
-            try:
-                oauth_path.parent.mkdir(parents=True, exist_ok=True)
-                if oauth_path.exists():
-                    shutil.copy2(oauth_path, oauth_path.with_suffix(".agyp-backup"))
-                shutil.copy2(profile_token, oauth_path)
-            except Exception as e:
-                self.show_error(f"Token swap failed: {e}")
-                return
+        # Swap in all auth files that exist in this profile
+        try:
+            for sys_path, filename in auth_files:
+                src = profile_dir / filename
+                if src.exists():
+                    sys_path.parent.mkdir(parents=True, exist_ok=True)
+                    if sys_path.exists():
+                        shutil.copy2(sys_path, sys_path.with_suffix(".agyp-backup"))
+                    shutil.copy2(src, sys_path)
+        except Exception as e:
+            self.show_error(f"Auth swap failed: {e}")
+            return
 
         if sys.platform == "darwin":
             cmd = ["open", "-n", "-a", "Antigravity"]
