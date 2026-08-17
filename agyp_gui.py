@@ -64,14 +64,14 @@ class App(ctk.CTk):
         # Theme Icon Toggle
         self.theme_btn = ctk.CTkButton(
             self.icons_frame,
-            text="☀",
-            width=30,
-            height=30,
-            corner_radius=15,
+            text="\uf185", # Nerd Font Sun
+            width=36,
+            height=36,
+            corner_radius=18,
             fg_color="transparent",
             text_color=("black", "white"),
             hover_color=("gray85", "gray20"),
-            font=ctk.CTkFont(size=20),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=22),
             command=self.toggle_theme
         )
         self.theme_btn.pack(side="left", padx=5)
@@ -79,14 +79,14 @@ class App(ctk.CTk):
         # Close Window Icon
         self.close_btn = ctk.CTkButton(
             self.icons_frame,
-            text="✕",
-            width=30,
-            height=30,
-            corner_radius=15,
+            text="\uf00d", # Nerd Font Cross
+            width=36,
+            height=36,
+            corner_radius=18,
             fg_color="transparent",
             text_color=("black", "white"),
-            hover_color="#FF3B30", # iOS Red on hover
-            font=ctk.CTkFont(size=20, weight="bold"),
+            hover_color=("#FF3B30", "#FF453A"),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=22),
             command=self.destroy
         )
         self.close_btn.pack(side="left")
@@ -114,11 +114,11 @@ class App(ctk.CTk):
             self.action_frame, 
             text="Launch", 
             font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
-            fg_color=AGY_BLUE,
-            hover_color="#005bb5",
+            fg_color=("#007AFF", "#0A84FF"),
+            hover_color=("#005bb5", "#0066cc"),
             text_color="white",
-            corner_radius=25,
-            height=50,
+            corner_radius=12,
+            height=45,
             command=self.launch_profile,
             state="disabled"
         )
@@ -128,13 +128,11 @@ class App(ctk.CTk):
             self.action_frame, 
             text="Delete", 
             font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
-            fg_color="transparent", 
-            border_width=2,
-            border_color="#FF3B30",
-            text_color="#FF3B30",
-            hover_color="gray15",
-            corner_radius=25,
-            height=50,
+            fg_color=("gray85", "#2C2C2E"), # iOS System Gray 5
+            text_color=("#FF3B30", "#FF453A"),
+            hover_color=("gray75", "#3A3A3C"),
+            corner_radius=12,
+            height=45,
             command=self.delete_profile,
             state="disabled"
         )
@@ -149,11 +147,10 @@ class App(ctk.CTk):
             self.new_frame, 
             placeholder_text="New profile name...",
             font=ctk.CTkFont(family="San Francisco", size=16),
-            height=50,
-            corner_radius=25,
-            fg_color=("white", "gray16"),
-            border_width=1,
-            border_color=("gray80", "gray25")
+            height=45,
+            corner_radius=12,
+            fg_color=("gray90", "#1C1C1E"),
+            border_width=0
         )
         self.entry_new.grid(row=0, column=0, padx=(0, 10), sticky="ew")
         self.entry_new.bind("<Return>", lambda e: self.create_profile())
@@ -162,12 +159,12 @@ class App(ctk.CTk):
             self.new_frame, 
             text="Add Profile", 
             font=ctk.CTkFont(family="San Francisco", size=16, weight="bold"),
-            fg_color="#34C759", # iOS Green
-            hover_color="#248a3d",
+            fg_color=("#34C759", "#32D74B"), # iOS System Green
+            hover_color=("#2eab4d", "#2ebf43"),
             text_color="white",
             width=140,
-            height=50,
-            corner_radius=25,
+            height=45,
+            corner_radius=12,
             command=self.create_profile
         )
         self.btn_add.grid(row=0, column=1)
@@ -177,12 +174,10 @@ class App(ctk.CTk):
     def toggle_theme(self):
         if ctk.get_appearance_mode() == "Dark":
             ctk.set_appearance_mode("Light")
-            self.theme_btn.configure(text="☾")
-            self.btn_delete.configure(hover_color="gray90")
+            self.theme_btn.configure(text="\uf186") # Moon
         else:
             ctk.set_appearance_mode("Dark")
-            self.theme_btn.configure(text="☀")
-            self.btn_delete.configure(hover_color="gray15")
+            self.theme_btn.configure(text="\uf185") # Sun
             
     def get_profiles(self):
         if not AGY_ACCOUNTS_DIR.exists():
@@ -293,8 +288,8 @@ class App(ctk.CTk):
             fg_color="#FF3B30",
             hover_color="#c92a22",
             text_color="white",
-            corner_radius=25,
-            height=50,
+            corner_radius=12,
+            height=45,
             command=self.execute_delete
         )
         self.btn_confirm.grid(row=0, column=0, padx=(0, 5), sticky="ew")
@@ -303,13 +298,11 @@ class App(ctk.CTk):
             self.action_frame,
             text="Cancel",
             font=ctk.CTkFont(family="San Francisco", size=15, weight="bold"),
-            fg_color="transparent",
-            border_width=2,
-            border_color=("gray70", "gray40"),
+            fg_color=("gray85", "#2C2C2E"),
             text_color=("black", "white"),
-            hover_color=("gray85", "gray25"),
-            corner_radius=25,
-            height=50,
+            hover_color=("gray75", "#3A3A3C"),
+            corner_radius=12,
+            height=45,
             command=self.cancel_delete
         )
         self.btn_cancel_del.grid(row=0, column=1, padx=(5, 0), sticky="ew")
