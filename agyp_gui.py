@@ -64,7 +64,7 @@ class App(ctk.CTk):
         # Theme Icon Toggle
         self.theme_btn = ctk.CTkButton(
             self.icons_frame,
-            text="\uf185", # Nerd Font Sun
+            text="\U000f0599", # Nerd Font MDI Sun
             width=36,
             height=36,
             corner_radius=18,
@@ -79,7 +79,7 @@ class App(ctk.CTk):
         # Close Window Icon
         self.close_btn = ctk.CTkButton(
             self.icons_frame,
-            text="\uf00d", # Nerd Font Cross
+            text="\U000f0156", # Nerd Font MDI Cross
             width=36,
             height=36,
             corner_radius=18,
@@ -174,10 +174,10 @@ class App(ctk.CTk):
     def toggle_theme(self):
         if ctk.get_appearance_mode() == "Dark":
             ctk.set_appearance_mode("Light")
-            self.theme_btn.configure(text="\uf186") # Moon
+            self.theme_btn.configure(text="\U000f0594") # MDI Moon
         else:
             ctk.set_appearance_mode("Dark")
-            self.theme_btn.configure(text="\uf185") # Sun
+            self.theme_btn.configure(text="\U000f0599") # MDI Sun
             
     def get_profiles(self):
         if not AGY_ACCOUNTS_DIR.exists():
