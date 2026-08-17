@@ -40,19 +40,11 @@ class App(ctk.CTk):
         # Logo/Title
         self.lbl_title = ctk.CTkLabel(
             self.header_frame, 
-            text="Antigravity", 
-            font=ctk.CTkFont(family="Helvetica", size=28, weight="bold"),
+            text="Antigravity Profiles (BETA)", 
+            font=ctk.CTkFont(family="Helvetica", size=24, weight="bold"),
             text_color=("black", "white")
         )
-        self.lbl_title.grid(row=0, column=0, sticky="w")
-        
-        self.lbl_subtitle = ctk.CTkLabel(
-            self.header_frame,
-            text="Isolated Workspaces",
-            font=ctk.CTkFont(family="Helvetica", size=14),
-            text_color=("gray40", "gray60")
-        )
-        self.lbl_subtitle.grid(row=1, column=0, sticky="w")
+        self.lbl_title.grid(row=0, column=0, rowspan=2, sticky="w")
         
         # Theme Switch (Icon based)
         self.switch_var = ctk.StringVar(value="on")
