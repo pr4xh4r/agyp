@@ -10,8 +10,8 @@
 
 # Antigravity Profiles Suite
 
-**Manage multiple isolated Antigravity profiles — with a beautiful GUI or a blazing-fast CLI.**  
-Keep your work, personal, and client sessions completely separate. Never lose a conversation again.
+**Switch between multiple Antigravity accounts instantly — GUI or CLI.**  
+Hit a limit? One click and you're on a fresh account, with your old history safe and waiting.
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)](#installation)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://python.org)
@@ -21,41 +21,50 @@ Keep your work, personal, and client sessions completely separate. Never lose a 
 
 ---
 
-## Why Use This?
+## The Problem This Solves
 
-Every Antigravity profile is a **fully isolated environment**. Each one has its own:
+Antigravity accounts have usage limits. When you hit one mid-project, you have two choices:
 
-- 📜 **Conversation history** — your `/resume` conversations are safe and never mixed
-- ⚙️ **Settings & preferences** — model selection, theme, tool policies per profile
-- 📁 **Projects & workspaces** — separate project lists for each context
-- 🔌 **Skills, Rules & MCP servers** — custom configs stay where they belong
-- 🗂️ **Scheduled tasks** — your cron jobs and timers don't bleed across profiles
+1. **Wait** for your limit to reset
+2. **Switch accounts** instantly and keep working
 
-### Real-world use cases
+This tool makes option 2 take **one click**.
 
-| Profile | What it's for |
-|---|---|
-| `work` | Your main job — history, projects, and settings all in one place |
-| `personal` | Side projects, experiments, personal tasks |
-| `client-acme` | Dedicated session for a specific client — share nothing |
-| `testing` | Try new models, risky settings, or destructive commands safely |
-| `fresh` | Always a clean slate — no history, no baggage |
+Each profile is a completely separate Antigravity account — its own auth, its own session, its own server-side conversation history. Switching profiles is like handing off to a fresh colleague who has full access to their own history.
 
 ---
 
-## The `/resume` Advantage
+## How It Works
 
-One of Antigravity's most powerful features is `/resume` — it lets you pick up any past conversation exactly where you left off. With profiles, this becomes even more powerful:
+Each profile stores its own **auth credentials** in isolation:
 
 ```
-# Inside your "work" profile
-/resume  →  shows ONLY your work conversations
-
-# Inside your "client-acme" profile
-/resume  →  shows ONLY that client's conversations
+~/.agyp-profiles/
+├── work/        ← Account 1 auth tokens + local config
+├── personal/    ← Account 2 auth tokens + local config
+└── client/      ← Account 3 auth tokens + local config
 ```
 
-**Your history is never lost.** Each profile stores its own conversation database independently. You can always go back to any profile and `/resume` exactly where you left off — days, weeks, or months later.
+When you launch a profile, Antigravity (CLI or Desktop App) starts using that account's credentials. Your **conversation history, projects, and `/resume`** are all tied to the account on Antigravity's servers — they're always there, whether you're using the CLI or the GUI app.
+
+---
+
+## The `/resume` Workflow
+
+This is the real power. Your project history never dies — it's saved server-side per account.
+
+**Scenario: You hit a limit mid-project**
+
+```
+Profile "work" hits limit
+  → Open agyp, switch to "work-2"
+  → Type /resume inside Antigravity
+  → Pick up your project history and keep going
+```
+
+Each account's `/resume` shows only that account's conversations — perfectly organized by account, automatically.
+
+**You never lose history.** Every conversation is saved server-side. Switch back to any profile at any time and `/resume` exactly where you left off — days or months later.
 
 ---
 
@@ -72,9 +81,8 @@ bash install.sh
 The installer automatically:
 - Detects your Python environment (including Arch Linux / Debian 12 managed Python)
 - Installs `customtkinter` for the GUI
-- Creates `agyp-cli`, `agyp-gui` commands in `~/.local/bin/`
+- Creates `agyp-cli` and `agyp-gui` commands in `~/.local/bin/`
 - Adds a desktop shortcut to your app launcher
-- Creates `~/.agyp-profiles/` for your profile data
 
 ### macOS
 
@@ -103,60 +111,66 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### GUI — `agyp-gui`
 
-Launch from terminal or your app launcher:
-
 ```bash
 agyp-gui
 ```
 
-**What you can do:**
-- **Select a profile** from the list and click **Launch** to open Antigravity bound to that profile
-- **Add Profile** — type a name and press Enter or click the green button
-- **Delete Profile** — select a profile and click Delete; confirms inline before removing anything
-- **Toggle theme** — click the ☀ / ☽ circular button in the top right
-- **Close** — click ✕ or press Cmd+W (macOS) / Alt+F4 (Windows)
+- Click a profile → click **Launch** → Antigravity opens with that account
+- **Add Profile** — type a name, press Enter or click the green button
+- **Delete Profile** — select and click Delete, confirms inline
+- **Toggle theme** — click the ☀ / ☽ button top right
+- **Close** — ✕ button, Cmd+W (macOS), or native window close button
 
 ### CLI — `agyp` or `agyp-cli`
-
-Launch the interactive menu:
 
 ```bash
 agyp
 ```
 
-Or launch a specific profile directly (great for scripts and shortcuts):
+Or jump straight to a profile:
 
 ```bash
 agyp work
 agyp personal
-agyp client-acme
+agyp client
 ```
 
-**Keyboard controls:**
+**Controls:**
 
 | Key | Action |
 |---|---|
-| `↑` / `↓` | Navigate the menu |
+| `↑` / `↓` | Navigate |
 | `Enter` | Select / confirm |
-| `Ctrl+C` | Exit cleanly |
+| `Ctrl+C` | Exit |
 
 ---
 
-## How Profile Isolation Works
+## Real-World Use Cases
 
-Each profile is stored as a directory under `~/.agyp-profiles/`:
+| Profile | Use |
+|---|---|
+| `work` | Main account — daily work, projects |
+| `work-2` | Backup — switch here when `work` hits limits |
+| `personal` | Personal projects, separate history |
+| `client-acme` | Dedicated account for a specific client |
+| `testing` | Burn through limits here, keep main clean |
 
-```
-~/.agyp-profiles/
-├── work/           ← All "work" data lives here
-│   ├── .config/
-│   ├── .local/
-│   └── ...
-├── personal/
-└── client-acme/
-```
+---
 
-When you launch a profile, the suite sets the Antigravity app's `--user-data-dir` to point exclusively at that profile's folder. The app sees it as a completely fresh, isolated home. **No data ever leaks between profiles.**
+## Features
+
+| Feature | CLI | GUI |
+|---|---|---|
+| Switch Antigravity accounts | ✅ | ✅ |
+| Auth isolation per profile | ✅ | ✅ |
+| Works with CLI (`agy`) | ✅ | — |
+| Works with Desktop App | — | ✅ |
+| Create / delete profiles | ✅ | ✅ |
+| Dark / Light mode | — | ✅ |
+| macOS native close (red dot + Cmd+W) | — | ✅ |
+| Headless / SSH safe | ✅ | ✅ |
+| Works without Nerd Font | ✅ | ✅ |
+| Profile name security (no path traversal) | ✅ | ✅ |
 
 ---
 
@@ -166,7 +180,7 @@ When you launch a profile, the suite sets the Antigravity app's `--user-data-dir
 agyp-suite/
 ├── agyp_cli.py        # TUI — interactive arrow-key menu, cross-platform
 ├── agyp_gui.py        # GUI — iOS-inspired dark/light mode interface
-├── install.sh         # Linux installer (handles Arch, Ubuntu, Fedora, Debian...)
+├── install.sh         # Linux installer (Arch, Ubuntu, Fedora, Debian...)
 ├── install_mac.sh     # macOS installer
 ├── install.bat        # Windows installer
 ├── run-cli.bat        # Windows CLI launcher
@@ -175,41 +189,23 @@ agyp-suite/
 
 ---
 
-## Features at a Glance
-
-| Feature | CLI | GUI |
-|---|---|---|
-| Create / delete profiles | ✅ | ✅ |
-| Launch isolated Antigravity session | ✅ | ✅ |
-| Dark / Light mode | — | ✅ |
-| Profile name sanitization (security) | ✅ | ✅ |
-| Works without Nerd Font installed | ✅ | ✅ |
-| macOS native close (red dot + Cmd+W) | — | ✅ |
-| Headless / SSH safe | ✅ | ✅ |
-| No data leaks between profiles | ✅ | ✅ |
-
----
-
 ## Requirements
 
-| | Minimum |
+| | |
 |---|---|
 | Python | 3.8+ |
-| Antigravity | Any version with `--user-data-dir` support |
-| GUI dependency | `customtkinter` (auto-installed) |
-| Font (optional) | JetBrainsMono Nerd Font — for sharp icons in GUI |
+| Antigravity | CLI (`agy`) or Desktop App |
+| GUI dep | `customtkinter` — auto-installed |
+| Font | JetBrainsMono Nerd Font *(optional, for sharp icons)* |
 
 ---
 
 ## Contributing
 
-Pull requests are welcome. Please:
-- Keep the CLI and GUI in sync for all features
-- Test on at least one of Linux / macOS / Windows before submitting
-- Do not hardcode paths — use `Path.home()` and relative script paths
+PRs welcome. Keep CLI and GUI in sync, avoid hardcoded paths, test cross-platform.
 
 ---
 
 ## License
 
-MIT — do whatever you want, just keep the attribution.
+MIT — use freely, keep attribution.
