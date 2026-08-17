@@ -53,12 +53,12 @@ When agy1 hits a rate limit, open the tool, switch to agy2, keep going. When you
 
 **Linux**
 ```bash
-git clone https://github.com/yourusername/agyp-suite
+git clone https://github.com/pr4xh4r/agyp-suite
 cd agyp-suite
 bash install.sh
 ```
 
-Handles Python environments including Arch/Debian where pip is restricted — creates a small venv if needed.
+Handles Python environments including Arch/Debian where pip is restricted — creates a small venv if needed. Scripts are copied to `~/.local/share/agyp/` so the tool keeps working even if you move or delete the cloned repo.
 
 **macOS**
 ```bash
@@ -85,6 +85,10 @@ agyp-gui
 
 Pick a profile from the list, hit Launch. Add new profiles with the text box at the bottom. First time you use a new profile, Antigravity asks you to log in — after that the credentials are saved and it just works.
 
+On **macOS**, a yellow "Save Credentials" button appears after launching the Desktop App. Click it once you're done with the session so your refreshed tokens are saved back to the profile.
+
+On **Linux / Windows**, credentials are saved back automatically when the Desktop App closes.
+
 **CLI**
 ```bash
 agyp
@@ -109,7 +113,7 @@ Antigravity stores its auth in three files:
 
 When you switch profiles, this tool swaps all three files simultaneously — so both the CLI and the Desktop App switch to the correct account instantly.
 
-Profiles are stored in `~/.agyp-profiles/`, one folder per profile. After each session, the refreshed tokens are automatically saved back.
+Profiles are stored in `~/agyp-profiles/`, one folder per profile. After each session, the refreshed tokens are automatically saved back.
 
 ---
 
@@ -143,4 +147,5 @@ assets/          — screenshots
 - Tested on Arch Linux, Ubuntu, Fedora, macOS Sonoma, Windows 11
 - Safe to run over SSH — detects headless environments and won't crash
 - Profile names are sanitized — path traversal and special characters blocked
-- Your tokens stay in `~/.agyp-profiles/` on your machine only — never uploaded anywhere
+- Your tokens stay in `~/agyp-profiles/` on your machine only — never uploaded anywhere
+- After install, scripts live in `~/.local/share/agyp/` — moving the cloned repo won't break anything
