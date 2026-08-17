@@ -68,10 +68,10 @@ class App(ctk.CTk):
             width=36,
             height=36,
             corner_radius=18,
-            fg_color="transparent",
+            fg_color=("gray90", "gray15"),
             text_color=("black", "white"),
-            hover_color=("gray85", "gray20"),
-            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=22),
+            hover_color=("gray80", "gray25"),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=20),
             command=self.toggle_theme
         )
         self.theme_btn.pack(side="left", padx=5)
@@ -83,10 +83,10 @@ class App(ctk.CTk):
             width=36,
             height=36,
             corner_radius=18,
-            fg_color="transparent",
+            fg_color=("gray90", "gray15"),
             text_color=("black", "white"),
             hover_color=("#FF3B30", "#FF453A"),
-            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=22),
+            font=ctk.CTkFont(family="JetBrainsMono Nerd Font", size=20),
             command=self.destroy
         )
         self.close_btn.pack(side="left")
