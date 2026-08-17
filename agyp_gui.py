@@ -253,6 +253,13 @@ class App(ctk.CTk):
         
         env = os.environ.copy()
         env["HOME"] = str(profile_dir)
+        env["USERPROFILE"] = str(profile_dir) # Windows isolation
+        
+        # Redirect XDG paths for Linux apps to ensure full Electron/GUI isolation
+        env["XDG_CONFIG_HOME"] = str(profile_dir / ".config")
+        env["XDG_DATA_HOME"] = str(profile_dir / ".local/share")
+        env["XDG_STATE_HOME"] = str(profile_dir / ".local/state")
+        env["XDG_CACHE_HOME"] = str(profile_dir / ".cache")
         
         if sys.platform == "darwin":
             # macOS relies on the App bundle name
