@@ -17,7 +17,7 @@ ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
 AGY_ACCOUNTS_DIR = Path.home() / ".agy_accounts"
-TARGET_CMD = "antigravity"
+TARGET_CMD = "agy"
 APP_TITLE = "Antigravity Profiles"
 AGY_BLUE = "#007AFF" # iOS Blue
 
@@ -235,6 +235,18 @@ class App(ctk.CTk):
             btn.grid(row=i, column=0, sticky="ew", pady=2)
             self.profile_buttons.append(btn)
 
+    def show_error(self, msg):
+        if not hasattr(self, 'lbl_error'):
+            self.lbl_error = ctk.CTkLabel(
+                self,
+                text="",
+                text_color="#FF453A",
+                font=ctk.CTkFont(family="San Francisco", size=14, weight="bold")
+            )
+        self.lbl_error.configure(text=msg)
+        self.lbl_error.grid(row=4, column=0, pady=(0, 10))
+        self.after(4000, self.lbl_error.grid_forget)
+
     def do_launch(self, profile_name):
         profile_dir = AGY_ACCOUNTS_DIR / profile_name
         profile_dir.mkdir(exist_ok=True)
@@ -250,15 +262,7 @@ class App(ctk.CTk):
             else:
                 subprocess.Popen([TARGET_CMD], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except FileNotFoundError:
-            dialog = ctk.CTkToplevel(self)
-            dialog.title("Error")
-            dialog.geometry("300x150")
-            dialog.transient(self)
-            dialog.grab_set()
-            lbl = ctk.CTkLabel(dialog, text=f"Could not find '{TARGET_CMD}'\non your system.", text_color="#FF3B30")
-            lbl.pack(pady=20)
-            btn = ctk.CTkButton(dialog, text="OK", command=dialog.destroy)
-            btn.pack()
+            self.show_error(f"Could not find '{TARGET_CMD}' on your system.")
 
     def launch_profile(self):
         p = self.selected_profile.get()
