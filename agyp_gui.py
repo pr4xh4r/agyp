@@ -264,7 +264,7 @@ class App(ctk.CTk):
                 self,
                 text="",
                 text_color="#FF453A",
-                font=ctk.CTkFont(family="San Francisco", size=14, weight="bold")
+                font=ctk.CTkFont(family=UI_FONT, size=14, weight="bold")
             )
         self.lbl_error.configure(text=msg)
         self.lbl_error.grid(row=4, column=0, pady=(0, 10))
@@ -324,8 +324,37 @@ class App(ctk.CTk):
         p = self.selected_profile.get()
         if p: self.do_launch(p)
 
+    def sanitize_name(self, name: str):
+        """Return a cleaned profile name or None if the name is invalid.
+
+        Only alphanumeric characters, spaces, hyphens, and underscores are
+        allowed.  Path-traversal sequences (slashes, backslashes, '..',
+        leading dots) and control characters are all rejected.
+        """
+        # Strip leading/trailing whitespace first
+        name = name.strip()
+        if not name:
+            return None
+        # Reject anything with directory separators or traversal sequences
+        if '/' in name or '\\' in name or '..' in name:
+            return None
+        # Reject leading dots (hidden-file convention)
+        if name.startswith('.'):
+            return None
+        # Reject control characters
+        if re.search(r'[\x00-\x1f\x7f]', name):
+            return None
+        # Allow only alphanumeric, spaces, hyphens, underscores
+        if not re.fullmatch(r'[A-Za-z0-9 _-]+', name):
+            return None
+        return name
+
     def create_profile(self):
-        p = self.entry_new.get().strip()
+        raw = self.entry_new.get().strip()
+        p = self.sanitize_name(raw)
+        if raw and p is None:
+            self.show_error("Invalid profile name. Use only letters, numbers, spaces, hyphens, or underscores.")
+            return
         if p:
             self.do_launch(p)
             self.entry_new.delete(0, 'end')
@@ -344,7 +373,7 @@ class App(ctk.CTk):
         self.btn_confirm = ctk.CTkButton(
             self.action_frame,
             text=f"Confirm Delete '{p}'?",
-            font=ctk.CTkFont(family="San Francisco", size=15, weight="bold"),
+            font=ctk.CTkFont(family=UI_FONT, size=15, weight="bold"),
             fg_color="#FF3B30",
             hover_color="#c92a22",
             text_color="white",
@@ -357,7 +386,7 @@ class App(ctk.CTk):
         self.btn_cancel_del = ctk.CTkButton(
             self.action_frame,
             text="Cancel",
-            font=ctk.CTkFont(family="San Francisco", size=15, weight="bold"),
+            font=ctk.CTkFont(family=UI_FONT, size=15, weight="bold"),
             fg_color=("gray85", "#2C2C2E"),
             text_color=("black", "white"),
             hover_color=("gray75", "#3A3A3C"),
