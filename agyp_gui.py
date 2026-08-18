@@ -383,21 +383,13 @@ class App(ctk.CTk):
         self.refresh_list()
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Session recovery
+    # Session recovery (no-op: HOME isolation means tokens auto-save to profile)
     # ─────────────────────────────────────────────────────────────────────────
 
     def _recover_last_session(self):
-        """On startup, save current tokens back to the last active profile.
-        Handles the case where the Desktop App was closed without GUI noticing."""
-        last = _get_last_active()
-        if last:
-            profile_dir = AGY_ACCOUNTS_DIR / last
-            if profile_dir.is_dir():
-                try:
-                    _save_back(profile_dir)
-                except Exception:
-                    pass
-            _clear_last_active()
+        """No-op: with HOME isolation, the IDE writes tokens directly into the
+        profile directory. No manual save-back needed."""
+        pass
 
     # ─────────────────────────────────────────────────────────────────────────
     # Theme
@@ -724,16 +716,8 @@ class App(ctk.CTk):
         self.refresh_list()
 
     def on_close(self):
-        """Save credentials for any currently monitored profile before closing."""
-        last = _get_last_active()
-        if last:
-            profile_dir = AGY_ACCOUNTS_DIR / last
-            if profile_dir.is_dir():
-                try:
-                    _save_back(profile_dir)
-                except Exception:
-                    pass
-            _clear_last_active()
+        """No save-back needed: HOME isolation means the IDE already wrote
+        tokens directly into the profile directory during the session."""
         self.destroy()
 
 

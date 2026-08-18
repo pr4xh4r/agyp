@@ -274,6 +274,15 @@ def kill_existing_cli():
         pass
     time.sleep(0.5)
 
+    # agy uses raw terminal mode for its interactive UI. If we kill it mid-session,
+    # the terminal is left in a broken state printing "1u;1u;..." escape sequences.
+    # stty sane resets all terminal settings back to a sane default.
+    if sys.platform != "win32":
+        try:
+            subprocess.run(["stty", "sane"], stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
 
 def launch_profile(profile, args):
     """Launch agy in a completely isolated HOME environment."""
