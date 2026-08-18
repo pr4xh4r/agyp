@@ -72,7 +72,37 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 
 **Windows**
 
-Double-click `install.bat`, then use `run-gui.bat` or `run-cli.bat` to launch. Requires Python 3.8+ from python.org.
+**Prerequisites (do these once, before anything else):**
+
+1. **Install Python 3.8+** from [python.org](https://www.python.org/downloads/)
+   > ⚠️ During the installer, check **"Add Python to PATH"** — this is critical!
+
+2. **Install Git** from [git-scm.com](https://git-scm.com/download/win) (needed to clone the repo)
+
+**Install:**
+
+Open **Command Prompt** or **PowerShell** and run:
+
+```cmd
+git clone https://github.com/pr4xh4r/agyp
+cd agyp
+install.bat
+```
+
+> The installer copies scripts to `%LOCALAPPDATA%\agyp\` and automatically adds it to your PATH.
+
+**After install, open a NEW terminal window**, then use either command from anywhere:
+
+```cmd
+agyp-cli
+agyp-gui
+```
+
+**Or** without opening a terminal, just double-click from the cloned folder:
+- `run-cli.bat` — opens the terminal profile manager
+- `run-gui.bat` — opens the graphical profile manager
+
+**Profiles are stored in:** `C:\Users\<you>\agyp-profiles\`
 
 ---
 
