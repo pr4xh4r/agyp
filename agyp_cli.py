@@ -276,22 +276,26 @@ def kill_existing_cli():
 
 
 def launch_profile(profile, args):
-    """Switch to a profile then launch agy, saving tokens back after exit."""
+    """Launch agy in a completely isolated HOME environment."""
     profile_dir = PROFILES_DIR / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n{C_BLUE}Switching to profile '{profile}'...{C_RESET}")
+    print(f"
+{C_BLUE}Switching to profile '{profile}'...{C_RESET}")
 
     kill_existing_cli()
 
-    swapped = swap_in_profile(profile_dir)
-    if swapped > 0:
-        print(f"{C_GREEN}Account loaded ({swapped} auth file(s) swapped). Launching...{C_RESET}\n")
-    else:
-        print(f"{C_YELLOW}New profile — you will be asked to log in.{C_RESET}")
-        print(f"{C_GRAY}After logging in, your credentials are saved to this profile automatically.{C_RESET}\n")
+    # Migrate any old flat tokens to the isolated HOME structure
+    for _, filename in AUTH_FILES:
+        old_path = profile_dir / filename
+        if old_path.exists():
+            new_path = profile_dir / ".gemini" / ("antigravity-cli/" + filename if "oauth-token" in filename else filename)
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.move(str(old_path), str(new_path))
 
-    set_last_active(profile)
+    print(f"{C_GREEN}Launching in isolated environment...{C_RESET}
+")
 
     import json
     CONFIG_FILE = PROFILES_DIR / "config.json"
@@ -312,43 +316,34 @@ def launch_profile(profile, args):
             CONFIG_FILE.write_text(json.dumps(data), encoding="utf-8")
         except: pass
 
-    # Find the agy command — prefer custom path, fall back to PATH search
     _custom = get_custom_cli()
     if _custom and os.path.isfile(_custom):
         cmd_path = _custom
     else:
+        import shutil
         cmd_path = shutil.which("agy") or shutil.which("agy.exe") or shutil.which("agy.cmd")
 
-    # Verify CLI exists before trying to run it
     if not cmd_path:
         print(f"{C_RED}Error: 'agy' command not found in your PATH.{C_RESET}")
-        print(f"{C_YELLOW}If you have installed the Antigravity CLI in a custom location,")
-        ans = input(f"would you like to provide the absolute path to it now? [y/N]: {C_RESET}")
-        if ans.lower().startswith('y'):
-            custom_path = input(f"{C_WHITE}Enter absolute path to 'agy' executable: {C_RESET}").strip()
-            custom_path = custom_path.strip('"').strip("'")
-            if os.path.isfile(custom_path):
-                set_custom_cli(custom_path)
-                cmd_path = custom_path
-                print(f"{C_GREEN}Path saved successfully! Launching...{C_RESET}\n")
-            else:
-                print(f"{C_RED}Invalid path. Please try again later.{C_RESET}")
-                clear_last_active()
-                sys.exit(1)
-        else:
-            clear_last_active()
-            sys.exit(1)
-
-    # On Windows: .bat/.cmd files need shell=True, .exe files do not
-    use_shell = sys.platform == "win32" and not str(cmd_path).lower().endswith(".exe")
-    try:
-        ret = subprocess.call([cmd_path] + args, shell=use_shell)
-    except FileNotFoundError:
-        print(f"{C_RED}Error: '{cmd_path}' not found or not executable.{C_RESET}")
         sys.exit(1)
 
-    save_back_profile(profile_dir)
-    clear_last_active()
+    use_shell = sys.platform == "win32" and not str(cmd_path).lower().endswith(".exe")
+    
+    env = os.environ.copy()
+    if sys.platform == "win32":
+        env["USERPROFILE"] = str(profile_dir)
+        env["HOMEDRIVE"] = profile_dir.drive
+        env["HOMEPATH"] = str(profile_dir)[len(profile_dir.drive):]
+    else:
+        env["HOME"] = str(profile_dir)
+
+    try:
+        import subprocess
+        ret = subprocess.call([cmd_path] + args, shell=use_shell, env=env)
+    except FileNotFoundError:
+        print(f"{C_RED}Error: '{cmd_path}' not found.{C_RESET}")
+        sys.exit(1)
+
     sys.exit(ret)
 
 

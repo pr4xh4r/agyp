@@ -572,72 +572,54 @@ class App(ctk.CTk):
         profile_dir = AGY_ACCOUNTS_DIR / profile_name
         profile_dir.mkdir(exist_ok=True)
 
-        # 1. Save the previous session's tokens before doing anything
-        last = _get_last_active()
-        if last:
-            try:
-                _save_back(AGY_ACCOUNTS_DIR / last)
-            except Exception:
-                pass
-
-        # 2. Kill existing IDE instances so they don't block the new profile
         self._kill_existing_ide()
 
-        # 3. Swap in the new tokens
-        try:
-            _swap_in(profile_dir)
-        except Exception as e:
-            self.show_error(f"Auth swap failed: {e}")
-            return
+        # Migrate old tokens to new isolated HOME structure
+        for _, filename in AUTH_FILES:
+            old_path = profile_dir / filename
+            if old_path.exists():
+                new_path = profile_dir / ".gemini" / ("antigravity-cli/" + filename if "oauth-token" in filename else filename)
+                new_path.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.move(str(old_path), str(new_path))
 
-        _set_last_active(profile_name)
+        env = os.environ.copy()
+        if sys.platform == "win32":
+            env["USERPROFILE"] = str(profile_dir)
+            env["HOMEDRIVE"] = profile_dir.drive
+            env["HOMEPATH"] = str(profile_dir)[len(profile_dir.drive):]
+        else:
+            env["HOME"] = str(profile_dir)
 
         if sys.platform == "darwin":
-            # macOS: `open` returns immediately — show Save Credentials button
             try:
                 custom = get_custom_ide_path()
                 cmd = ["open", "-n", "-a", custom] if custom else ["open", "-n", "-a", "Antigravity"]
-                result = subprocess.run(cmd, capture_output=True)
+                result = subprocess.run(cmd, capture_output=True, env=env)
                 if result.returncode != 0:
-                    self.show_error("Antigravity not found. Click the \u2699 (Gear) icon above to locate it.")
-                    _clear_last_active()
+                    self.show_error("Antigravity not found. Click the ⚙ (Gear) icon above to locate it.")
                     return
             except Exception as e:
                 self.show_error(f"Launch failed: {e}")
-                _clear_last_active()
                 return
-            self._show_save_credentials_btn(profile_name)
-
         elif sys.platform == "win32":
             exe = _find_windows_exe()
             if exe:
                 try:
-                    proc = subprocess.Popen([exe])
-                    self._monitor_process(proc, profile_name)
+                    subprocess.Popen([exe], env=env)
                 except Exception as e:
                     self.show_error(f"Launch failed: {e}")
-                    _clear_last_active()
             else:
-                _clear_last_active()
-                self.show_error("Antigravity not found. Click the \u2699 (Gear) icon above to locate it.")
-
+                self.show_error("Antigravity not found. Click the ⚙ (Gear) icon above to locate it.")
         else:
-            # Linux
             valid_cmd = _find_linux_cmd()
             if valid_cmd:
                 try:
-                    proc = subprocess.Popen(
-                        [valid_cmd],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    self._monitor_process(proc, profile_name)
+                    subprocess.Popen([valid_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
                 except Exception as e:
                     self.show_error(f"Launch failed: {e}")
-                    _clear_last_active()
             else:
-                _clear_last_active()
-                self.show_error("Antigravity not found. Click the \u2699 (Gear) icon above to locate it.")
+                self.show_error("Antigravity not found. Click the ⚙ (Gear) icon above to locate it.")
 
     def _monitor_process(self, proc, profile_name):
         """Watch process in background thread; save back tokens when it exits."""
