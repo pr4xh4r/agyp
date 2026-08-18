@@ -280,8 +280,7 @@ def launch_profile(profile, args):
     profile_dir = PROFILES_DIR / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"
-{C_BLUE}Switching to profile '{profile}'...{C_RESET}")
+    print(f"\\n{C_BLUE}Switching to profile '{profile}'...{C_RESET}")
 
     kill_existing_cli()
 
@@ -294,8 +293,7 @@ def launch_profile(profile, args):
             import shutil
             shutil.move(str(old_path), str(new_path))
 
-    print(f"{C_GREEN}Launching in isolated environment...{C_RESET}
-")
+    print(f"{C_GREEN}Launching in isolated environment...{C_RESET}\\n")
 
     import json
     CONFIG_FILE = PROFILES_DIR / "config.json"
