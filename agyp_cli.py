@@ -256,12 +256,29 @@ def clear_last_active():
         pass
 
 
+def kill_existing_cli():
+    """Forcefully close any background Antigravity CLI daemons so new tokens are read."""
+    import time
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/IM", "agy.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform == "darwin":
+            subprocess.run(["killall", "-9", "agy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(["killall", "-9", "agy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+    time.sleep(0.5)
+
+
 def launch_profile(profile, args):
     """Switch to a profile then launch agy, saving tokens back after exit."""
     profile_dir = PROFILES_DIR / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{C_BLUE}Switching to profile '{profile}'...{C_RESET}")
+
+    kill_existing_cli()
 
     swapped = swap_in_profile(profile_dir)
     if swapped > 0:

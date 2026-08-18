@@ -544,10 +544,40 @@ class App(ctk.CTk):
             set_custom_ide_path(None)
             self.show_info("Custom path reset to default.")
 
+    def _kill_existing_ide(self):
+        """Forcefully close any running Antigravity IDE instances so new tokens are read."""
+        import time
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/F", "/IM", "Antigravity.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["taskkill", "/F", "/IM", "Antigravity IDE.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["taskkill", "/F", "/IM", "antigravity-ide.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif sys.platform == "darwin":
+                subprocess.run(["killall", "Antigravity"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.run(["killall", "antigravity"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["killall", "antigravity-ide"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["killall", "antigravity-desktop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        time.sleep(0.5)
+
     def do_launch(self, profile_name):
         profile_dir = AGY_ACCOUNTS_DIR / profile_name
         profile_dir.mkdir(exist_ok=True)
 
+        # 1. Save the previous session's tokens before doing anything
+        last = _get_last_active()
+        if last:
+            try:
+                _save_back(AGY_ACCOUNTS_DIR / last)
+            except Exception:
+                pass
+
+        # 2. Kill existing IDE instances so they don't block the new profile
+        self._kill_existing_ide()
+
+        # 3. Swap in the new tokens
         try:
             _swap_in(profile_dir)
         except Exception as e:
@@ -612,11 +642,12 @@ class App(ctk.CTk):
                 proc.wait()
             except Exception:
                 pass
-            try:
-                _save_back(profile_dir)
-            except Exception:
-                pass
-            _clear_last_active()
+            if _get_last_active() == profile_name:
+                try:
+                    _save_back(profile_dir)
+                except Exception:
+                    pass
+                _clear_last_active()
 
         t = threading.Thread(target=_watcher, daemon=True)
         t.start()
