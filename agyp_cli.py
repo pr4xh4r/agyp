@@ -281,10 +281,14 @@ def kill_existing_cli():
     time.sleep(0.5)
 
     # agy uses raw terminal mode for its interactive UI. If we kill it mid-session,
-    # the terminal is left in a broken state printing "1u;1u;..." escape sequences.
-    # stty sane resets all terminal settings back to a sane default.
+    # the terminal emulator itself might still have mouse tracking or bracketed paste enabled.
     if sys.platform != "win32":
         try:
+            # Disable mouse tracking and bracketed paste via ANSI escape codes
+            sys.stdout.write("\033[?25h")  # Show cursor
+            sys.stdout.write("\033[?1000l\033[?1002l\033[?1003l\033[?1015l\033[?1006l") # Disable mouse tracking
+            sys.stdout.write("\033[?2004l") # Disable bracketed paste
+            sys.stdout.flush()
             subprocess.run(["stty", "sane"], stderr=subprocess.DEVNULL)
         except Exception:
             pass
