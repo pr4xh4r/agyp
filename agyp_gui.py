@@ -558,6 +558,12 @@ class App(ctk.CTk):
                 subprocess.run(["killall", "antigravity"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(["killall", "antigravity-ide"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(["killall", "antigravity-desktop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    subprocess.run(["taskkill.exe", "/F", "/IM", "Antigravity.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(["taskkill.exe", "/F", "/IM", "Antigravity IDE.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(["taskkill.exe", "/F", "/IM", "antigravity-ide.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
         except Exception:
             pass
         time.sleep(0.5)

@@ -266,6 +266,10 @@ def kill_existing_cli():
             subprocess.run(["killall", "-9", "agy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             subprocess.run(["killall", "-9", "agy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                subprocess.run(["taskkill.exe", "/F", "/IM", "agy.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
     except Exception:
         pass
     time.sleep(0.5)
