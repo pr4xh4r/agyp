@@ -539,21 +539,24 @@ class App(ctk.CTk):
     def _kill_existing_ide(self):
         """Forcefully close any running Antigravity IDE instances so new tokens are read."""
         import time
+        # On Windows, CREATE_NO_WINDOW stops CMD windows flashing open for each kill call
+        _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:
             if sys.platform == "win32":
-                subprocess.run(["taskkill", "/F", "/IM", "Antigravity.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["taskkill", "/F", "/IM", "Antigravity IDE.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["taskkill", "/F", "/IM", "antigravity-ide.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                for name in ["Antigravity.exe", "Antigravity IDE.exe", "antigravity-ide.exe"]:
+                    subprocess.run(["taskkill", "/F", "/IM", name, "/T"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   creationflags=_no_win)
             elif sys.platform == "darwin":
                 subprocess.run(["killall", "Antigravity"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                subprocess.run(["killall", "antigravity"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["killall", "antigravity-ide"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["killall", "antigravity-desktop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                for name in ["antigravity", "antigravity-ide", "antigravity-desktop"]:
+                    subprocess.run(["killall", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 try:
-                    subprocess.run(["taskkill.exe", "/F", "/IM", "Antigravity.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    subprocess.run(["taskkill.exe", "/F", "/IM", "Antigravity IDE.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    subprocess.run(["taskkill.exe", "/F", "/IM", "antigravity-ide.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    for name in ["Antigravity.exe", "Antigravity IDE.exe", "antigravity-ide.exe"]:
+                        subprocess.run(["taskkill.exe", "/F", "/IM", name, "/T"],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       creationflags=_no_win)
                 except Exception:
                     pass
         except Exception:
@@ -591,6 +594,9 @@ class App(ctk.CTk):
             env["APPDATA"] = str(appdata)
             env["LOCALAPPDATA"] = str(localappdata)
 
+        # CREATE_NO_WINDOW: launch IDE silently on Windows — no CMD window
+        _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
         if sys.platform == "darwin":
             try:
                 custom = get_custom_ide_path()
@@ -606,7 +612,7 @@ class App(ctk.CTk):
             exe = _find_windows_exe()
             if exe:
                 try:
-                    subprocess.Popen([exe], env=env)
+                    subprocess.Popen([exe], env=env, creationflags=_no_win)
                 except Exception as e:
                     self.show_error(f"Launch failed: {e}")
             else:

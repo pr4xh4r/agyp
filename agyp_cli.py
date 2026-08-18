@@ -259,15 +259,21 @@ def clear_last_active():
 def kill_existing_cli():
     """Forcefully close any background Antigravity CLI daemons so new tokens are read."""
     import time
+    # On Windows, CREATE_NO_WINDOW stops CMD windows flashing open for each subprocess call
+    _no_win = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/IM", "agy.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["taskkill", "/F", "/IM", "agy.exe", "/T"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=_no_win)
         elif sys.platform == "darwin":
             subprocess.run(["killall", "-9", "agy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
             subprocess.run(["killall", "-9", "agy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
-                subprocess.run(["taskkill.exe", "/F", "/IM", "agy.exe", "/T"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["taskkill.exe", "/F", "/IM", "agy.exe", "/T"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=_no_win)
             except Exception:
                 pass
     except Exception:
