@@ -10,42 +10,36 @@
 
 # Antigravity Profiles
 
-Manage multiple Antigravity accounts from one terminal — fully isolated or token-only swap.
+Switch between multiple Antigravity (`agy`) accounts instantly — no logging out, no lost history.
 
 ![Linux](https://img.shields.io/badge/Linux-✓-blue?style=flat-square&logo=linux&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-✓-blue?style=flat-square&logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)
 ![CLI only](https://img.shields.io/badge/interface-CLI_only-blue?style=flat-square)
+![Accounts](https://img.shields.io/badge/accounts-unlimited-green?style=flat-square)
 
 </div>
 
 ---
 
-I built this because I kept hitting usage limits mid-project and the only option was to manually log out, log back in with a different account, and lose my place. That got old fast.
+## Why?
 
-## What it does
+When you hit a rate limit mid-project, the only option is to manually log out, log into a different Google account, and lose your place. This fixes that.
 
-Keeps separate credentials for each "profile" (account). On launch it asks you to pick a mode, then pick a profile — and drops you straight into `agy` under that account.
-
-Typical setup:
-
-- `main` — daily account
-- `backup` — for when `main` hits limits
-- `client` — separate account for client work
-
-When `main` hits a rate limit, run `agyp`, pick `backup`, keep going. When you come back to `main` later, `/resume` picks up exactly where you left off.
+Run `agyp`, pick an account, keep going. Your history for each account is separate. When you switch back later, `/resume` picks up exactly where you left off.
 
 ---
 
-## Modes
+## How many accounts?
 
-### Isolated *(recommended)*
-The profile directory becomes `$HOME` for the entire `agy` session. Nothing leaks in or out — separate conversation history, config, and credentials. This is the correct mode to use when running `agyp` from inside an existing `agy` session.
+**Unlimited.** Just create a new profile for each Google account. Each one is completely independent.
 
-### Unified
-Only the three auth token files are swapped. Everything else (conversation history, config, cache) is shared. Use this from **outside** an `agy` session. After the session ends, updated tokens are automatically saved back to the profile.
-
-> **Note:** Do not use Unified mode from inside an active `agy` session — launching a second `agy` with the same `$HOME` causes a session conflict. `agyp` will warn you if it detects this.
+```
+account1   → your main Google account
+account2   → backup for when account1 hits limits  
+work       → work Google account
+client     → client's account
+```
 
 ---
 
@@ -65,13 +59,10 @@ cd agyp
 bash install_mac.sh
 ```
 
-Add `~/.local/bin` to your PATH if it isn't already:
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-Scripts are copied to `~/.local/share/agyp/` so the tool keeps working even if you move or delete the cloned repo. No dependencies beyond Python 3 stdlib.
+> If you see `agyp: command not found` after install, add this to your `~/.bashrc` or `~/.zshrc` and restart the terminal:
+> ```bash
+> export PATH="$HOME/.local/bin:$PATH"
+> ```
 
 ---
 
@@ -81,65 +72,60 @@ Scripts are copied to `~/.local/share/agyp/` so the tool keeps working even if y
 agyp
 ```
 
-On launch you'll see two menus in sequence:
+That's it. You'll get two simple menus:
 
-1. **Choose mode** — `isolated` or `unified` (arrow keys + Enter)
-2. **Choose profile** — pick an existing profile or create a new one
-
-Or jump straight to a profile (uses isolated mode):
-```bash
-agyp myprofile
-agyp myprofile -- --some-agy-flag
+**Step 1 — Pick a mode:**
+```
+❯ isolated   ← use this (fully separate session)
+  unified    ← token swap only, shared history
 ```
 
-**First time** you use a profile, `agy` asks you to log in — after that the credentials are saved and it just works.
+**Step 2 — Pick a profile:**
+```
+  account1
+❯ account2
+  [+] Add Profile
+```
+
+First time you use a new profile, `agy` will ask you to log in with Google — after that it's saved and you never need to log in again for that account.
+
+### Skip the menu — go straight to a profile
+
+```bash
+agyp myaccount
+```
 
 ---
 
-## How it works
+## Isolated vs Unified — which to use?
 
-Antigravity stores its auth at these paths relative to `$HOME`:
+| | Isolated | Unified |
+|---|---|---|
+| Conversation history | Separate per profile | Shared |
+| Config & settings | Separate per profile | Shared |
+| Auth credentials | Separate per profile | Separate per profile |
+| **When to use** | **Always (recommended)** | Outside an `agy` session only |
 
-```
-.gemini/antigravity-cli/antigravity-oauth-token   ← CLI account token
-.gemini/oauth_creds.json                          ← OAuth credentials
-.gemini/google_accounts.json                      ← Active account info
-```
+**Just use Isolated.** It's the safe default — each account is fully sandboxed, nothing leaks between sessions.
 
-Each profile stores its own copies of these files at the exact same relative paths inside `~/agyp-profiles/<name>/`.
-
-**Isolated mode** sets `HOME=~/agyp-profiles/<name>` before launching `agy` — the binary reads and writes its tokens there naturally. No manual copying needed.
-
-**Unified mode** copies the profile's token files into the real `$HOME/.gemini/...` before launch, then copies them back after `agy` exits.
+> ⚠️ If you run `agyp unified` from **inside** an existing `agy` session, it may conflict with your current session. `agyp` will warn you if this happens.
 
 ---
 
 ## Requirements
 
-- Python 3.8+ (stdlib only — no pip installs)
-- `agy` (Antigravity CLI) in your `PATH`
+- `agy` (Antigravity CLI) — already installed if you're using Antigravity
+- Python 3.8+ — already on your system
 - Linux or macOS
 
----
-
-## Files
-
-```
-agyp_cli.py      — the entire tool (single file, no dependencies)
-install.sh       — Linux installer
-install_mac.sh   — macOS installer
-assets/          — screenshots
-```
+No additional packages needed.
 
 ---
 
-## Notes
+## Your data
 
-- Tested on Arch Linux, Ubuntu, Fedora, macOS Sonoma
-- Safe to run over SSH
-- Profile names are sanitized — path traversal and special characters blocked
-- Your tokens stay in `~/agyp-profiles/` on your machine only — never uploaded anywhere
-- After install, the script lives in `~/.local/share/agyp/` — moving the cloned repo won't break anything
-- `agyp` automatically migrates profiles created by older versions of the tool
+- All profiles are stored locally in `~/agyp-profiles/` — nothing is uploaded anywhere
+- Each profile's credentials are saved automatically after every session
+- Profile names only allow letters, numbers, spaces, hyphens, underscores — no funny business
 
-
+---
