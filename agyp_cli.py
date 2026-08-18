@@ -328,12 +328,20 @@ def launch_profile(profile, args):
     use_shell = sys.platform == "win32" and not str(cmd_path).lower().endswith(".exe")
     
     env = os.environ.copy()
+    env["HOME"] = str(profile_dir)
+    for xdg in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]:
+        env.pop(xdg, None)
+
     if sys.platform == "win32":
         env["USERPROFILE"] = str(profile_dir)
         env["HOMEDRIVE"] = profile_dir.drive
         env["HOMEPATH"] = str(profile_dir)[len(profile_dir.drive):]
-    else:
-        env["HOME"] = str(profile_dir)
+        appdata = profile_dir / "AppData" / "Roaming"
+        localappdata = profile_dir / "AppData" / "Local"
+        appdata.mkdir(parents=True, exist_ok=True)
+        localappdata.mkdir(parents=True, exist_ok=True)
+        env["APPDATA"] = str(appdata)
+        env["LOCALAPPDATA"] = str(localappdata)
 
     try:
         import subprocess
