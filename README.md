@@ -8,41 +8,42 @@
    ▄▀▀      ▀▀▄  
 </pre>
 
-# Antigravity Profiles
+# Antigravity Profiles (`agyp`)
 
-Switch between multiple Antigravity (`agy`) accounts instantly — no logging out, no lost history.
+**Manage unlimited Antigravity (`agy`) accounts from a single terminal.**
 
 ![Linux](https://img.shields.io/badge/Linux-✓-blue?style=flat-square&logo=linux&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-✓-blue?style=flat-square&logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)
-![Accounts](https://img.shields.io/badge/accounts-unlimited-green?style=flat-square)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
+
+<img src="assets/mainpage.png" width="48%"> <img src="assets/profilepage.png" width="48%">
 
 </div>
 
 ---
 
-## Why?
+## 💡 Why does this exist?
 
-When you hit a rate limit mid-project, the only option is to manually log out, log into a different Google account, and lose your place. This fixes that.
+You are deep into a coding session with Antigravity (`agy`) and suddenly... **you hit the rate limit.** 
+Normally, you'd have to log out, log into a different Google account, and lose your entire conversation history and context.
 
-Run `agyp`, pick an account, keep going. Your history for each account is separate. When you switch back later, `/resume` picks up exactly where you left off.
+**Not anymore.** 
+
+With `agyp`, you can create **unlimited profiles**. Hit a limit? Just open `agyp`, switch to your backup account, and keep coding. 
+
+## ✨ Features
+
+- 🚀 **Instant Account Switching:** Jump between work, personal, or backup accounts in seconds.
+- 🛡️ **Fully Isolated Sessions (Default):** Each profile gets its own separate history, workspace, and auth. Nothing leaks.
+- 🔗 **Unified Mode:** Want to share your conversation history across different accounts? Unified mode swaps only the auth tokens.
+- 💻 **Beautiful Interactive TUI:** Flicker-free, arrow-key navigation. Add, rename, and delete profiles right from the terminal.
+- 📧 **Smart Labels:** Automatically displays the authenticated Google email next to each profile.
+- ⚡ **Zero Dependencies:** Built in pure Python. Extremely lightweight and fast (~150ms startup).
 
 ---
 
-## How many accounts?
-
-**Unlimited.** Just create a new profile for each Google account. Each one is completely independent.
-
-```
-account1   → your main Google account
-account2   → backup for when account1 hits limits  
-work       → work Google account
-client     → client's account
-```
-
----
-
-## Install
+## 📦 Installation
 
 **Linux**
 ```bash
@@ -58,88 +59,35 @@ cd agyp
 bash install_mac.sh
 ```
 
-> If you see `agyp: command not found` after install, add this to your `~/.bashrc` or `~/.zshrc` and restart the terminal:
-> ```bash
-> export PATH="$HOME/.local/bin:$PATH"
-> ```
+> **Note:** If you see `agyp: command not found` after installing, ensure `~/.local/bin` is in your PATH. Add `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc` or `~/.zshrc`.
 
 ---
 
-## Usage
+## 🛠️ Usage
 
+Just run:
 ```bash
 agyp
 ```
+You'll be greeted by an interactive menu to choose your launch mode and select a profile. The first time you use a new profile, `agy` will ask you to log in. After that, it remembers you!
 
-That's it. You'll get two simple menus:
-
-**Step 1 — Pick a mode:**
-```
-❯ isolated   ← use this (fully separate session)
-  unified    ← token swap only, shared history
-```
-
-**Step 2 — Pick a profile:**
-```
-  account1
-❯ account2
-  [+] Add Profile
-```
-
-First time you use a new profile, `agy` will ask you to log in with Google — after that it's saved and you never need to log in again for that account.
-
-### Skip the menu — go straight to a profile
-
-```bash
-agyp myaccount
-```
+**Power User Shortcuts:**
+- `agyp <profile_name>` — Bypass the menu and launch directly into a profile (Isolated mode).
+- `agyp list` — View all saved profiles and their connected emails.
+- `agyp rename <old> <new>` — Rename a profile quickly.
 
 ---
 
-## Isolated vs Unified — which to use?
+## 🤝 Built by
 
-| | Isolated | Unified |
-|---|---|---|
-| Conversation history | Separate per profile | Shared |
-| Config & settings | Separate per profile | Shared |
-| Auth credentials | Separate per profile | Separate per profile |
-| **When to use** | **Always (recommended)** | Outside an `agy` session only |
-
-**Just use Isolated.** It's the safe default — each account is fully sandboxed, nothing leaks between sessions.
-
-> ⚠️ If you run `agyp unified` from **inside** an existing `agy` session, it may conflict with your current session. `agyp` will warn you if this happens.
-
----
-
-## Requirements
-
-- `agy` (Antigravity CLI) — already installed if you're using Antigravity
-- Python 3.8+ — already on your system
-- Linux or macOS
-
-No additional packages needed.
-
----
-
-## Your data
-
-- All profiles are stored locally in `~/agyp-profiles/` — nothing is uploaded anywhere
-- Each profile's credentials are saved automatically after every session
-- Profile names only allow letters, numbers, spaces, hyphens, underscores — no funny business
-
----
-
-## Built by
-
-Made by **[pr4xh4r](https://github.com/pr4xh4r)** — part of the **[Build x](https://x.com/buildx_main)** community.
+Made by **[pr4xh4r](https://github.com/pr4xh4r)** — proud member of the **[Build x](https://x.com/buildx_main)** community.
 
 Join us:
-- X (Twitter): https://x.com/buildx_main
-- Telegram: https://t.me/buildx_main
-- Reddit: https://reddit.com/r/buildx_main
+- 𝕏 (Twitter): [x.com/buildx_main](https://x.com/buildx_main)
+- 💬 Telegram: [t.me/buildx_main](https://t.me/buildx_main)
+- 👽 Reddit: [r/buildx_main](https://reddit.com/r/buildx_main)
+- 👾 Discord: [discord.gg/ShZRBUZ7AX](https://discord.gg/ShZRBUZ7AX)
 
----
-
-## License
+## 📄 License
 
 MIT © [pr4xh4r](https://github.com/pr4xh4r)
