@@ -34,12 +34,12 @@ With `agyp`, you can create **unlimited profiles**. Hit a limit? Just open `agyp
 
 ## Features
 
-- ➤ **Instant Account Switching:** Jump between work, personal, or backup accounts in seconds.
-- ⚐ **Fully Isolated Sessions (Default):** Each profile gets its own separate history, workspace, and auth. Nothing leaks.
-- ∞ **Unified Mode:** Want to share your conversation history across different accounts? Unified mode swaps only the auth tokens.
-- ▣ **Beautiful Interactive TUI:** Flicker-free, arrow-key navigation. Add, rename, and delete profiles right from the terminal.
-- ✉ **Smart Labels:** Automatically displays the authenticated Google email next to each profile.
-- ⚡ **Zero Dependencies:** Built in pure Python. Extremely lightweight and fast (~150ms startup).
+-  **Instant Account Switching:** Jump between work, personal, or backup accounts in seconds.
+-  **Fully Isolated Sessions (Default):** Each profile gets its own separate history, workspace, and auth. Nothing leaks.
+-  **Unified Mode:** Want to share your conversation history across different accounts? Unified mode swaps only the auth tokens.
+-  **Beautiful Interactive TUI:** Flicker-free, arrow-key navigation. Add, rename, and delete profiles right from the terminal.
+-  **Smart Labels:** Automatically displays the authenticated Google email next to each profile.
+-  **Zero Dependencies:** Built in pure Python. Extremely lightweight and fast (~150ms startup).
 
 ---
 
