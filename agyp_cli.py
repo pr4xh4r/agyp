@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
+# agyp — Antigravity Profiles
+# Manage unlimited Antigravity (agy) accounts from a single terminal.
+#
+# Author:  pr4xh4r (https://github.com/pr4xh4r)
+# License: MIT
+# Community: https://x.com/buildx_main
+
 import os
 import sys
-import subprocess
+import io
+import re
+import tty
+import json
 import shutil
+import atexit
+import termios
+import subprocess
+import webbrowser
 from pathlib import Path
 
 # ── Platform guard ─────────────────────────────────────────────────────────────
@@ -31,47 +45,79 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
-# Antigravity/Google Brand Colors (TrueColor ANSI)
+# ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
 C_GREEN  = "\033[38;2;52;168;83m"
 C_RED    = "\033[38;2;234;67;53m"
 C_YELLOW = "\033[38;2;251;188;5m"
-C_WHITE  = "\033[1;37m"
+C_WHITE  = "\033[37m"          # plain white — no bold, prevents icon size jump
 C_GRAY   = "\033[38;5;245m"
 C_RESET  = "\033[0m"
+C_JOIN   = "\033[38;2;112;230;39m"   # bright lime green (X logo color)
 
-# Profile storage dir — always in real system home
-PROFILES_DIR = _SYSTEM_HOME / "agyp-profiles"
+# ── Paths ──────────────────────────────────────────────────────────────────────
+PROFILES_DIR    = _SYSTEM_HOME / "agyp-profiles"
+CONFIG_FILE     = PROFILES_DIR / "config.json"
+LAST_ACTIVE_FILE = PROFILES_DIR / ".last_active"
 
-# ── Auth token paths ───────────────────────────────────────────────────────────
-#
-# Token files always live at the SAME relative paths inside any HOME dir.
-# We store them at those same relative paths inside the profile dir too,
-# so isolated mode (HOME=profile_dir) works with zero extra copying.
-#
-#   profile_dir/.gemini/antigravity-cli/antigravity-oauth-token
-#   profile_dir/.gemini/oauth_creds.json
-#   profile_dir/.gemini/google_accounts.json
-#
-# For unified mode we copy profile_dir/<rel> ↔ REAL_HOME/<rel>.
-
+# Token files live at the same relative paths inside any HOME dir.
 _TOKEN_RELPATHS = [
     Path(".gemini") / "antigravity-cli" / "antigravity-oauth-token",
     Path(".gemini") / "oauth_creds.json",
     Path(".gemini") / "google_accounts.json",
 ]
 
-LAST_ACTIVE_FILE = PROFILES_DIR / ".last_active"
-CONFIG_FILE      = PROFILES_DIR / "config.json"
+
+# ── Flicker-free terminal buffer ───────────────────────────────────────────────
+
+class TerminalBuffer:
+    """Render an entire screen frame in memory, then paint it in one shot."""
+    def __init__(self):
+        self.old_stdout = sys.stdout
+        self.buf = io.StringIO()
+
+    def write(self, s):
+        # Append erase-to-EOL before every newline so leftover chars are wiped
+        self.buf.write(s.replace('\n', '\033[K\n'))
+
+    def flush(self):
+        pass  # swallow intermediate flushes
+
+    def __enter__(self):
+        sys.stdout = self
+        return self
+
+    def __exit__(self, *args):
+        sys.stdout = self.old_stdout
+        # Move to top-left, paint frame, erase anything below
+        self.old_stdout.write('\033[H')
+        self.old_stdout.write(self.buf.getvalue())
+        self.old_stdout.write('\033[0J')
+        self.old_stdout.flush()
+
+
+# ── Terminal lifecycle ─────────────────────────────────────────────────────────
+
+def _reset_terminal():
+    """Restore terminal to a sane state — called automatically on exit."""
+    try:
+        sys.stdout.write("\033[?1049l")   # exit alternate screen buffer
+        sys.stdout.write("\033[?25h")     # show cursor
+        sys.stdout.write("\033[?1000l\033[?1002l\033[?1003l\033[?1015l\033[?1006l")
+        sys.stdout.write("\033[?2004l")   # disable bracketed paste
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+atexit.register(_reset_terminal)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def sanitize_name(name):
-    """Sanitize profile name to prevent path traversal attacks."""
-    import re
+    """Sanitize profile name — prevents path traversal and shell injection."""
     name = name.strip()
     if not name:
         return None
@@ -82,168 +128,332 @@ def sanitize_name(name):
     return name
 
 
+def get_profile_email(profile_name):
+    """Return the last authenticated email for a profile, or None."""
+    cli_log = PROFILES_DIR / profile_name / ".gemini" / "antigravity-cli" / "cli.log"
+    if cli_log.exists():
+        try:
+            with open(cli_log, "r", encoding="utf-8", errors="ignore") as fh:
+                for line in reversed(fh.readlines()):
+                    m = re.search(r'email=([^,\s]+)', line)
+                    if m:
+                        return m.group(1).strip()
+        except Exception:
+            pass
+    return None
+
+
 def get_key():
-    """Reads a single keypress without echoing to the screen (arrow keys + enter)."""
-    import tty, termios
+    """Read one keypress from raw stdin — handles arrow keys, Enter, Ctrl-C."""
     fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
+    old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        ch = sys.stdin.read(1)
-        if ch == '\x1b':
-            ch2 = sys.stdin.read(2)
-            if ch2 == '[A': return 'up'
-            if ch2 == '[B': return 'down'
-        if ch in ('\r', '\n'): return 'enter'
-        if ch == '\x03': return 'ctrl_c'
+        ch = os.read(fd, 1)
+        if ch == b'\x1b':
+            # Switch to 100 ms timeout to read escape sequence tail
+            esc = termios.tcgetattr(fd)
+            esc[6][termios.VMIN]  = 0
+            esc[6][termios.VTIME] = 1
+            termios.tcsetattr(fd, termios.TCSANOW, esc)
+            rest = os.read(fd, 6)
+            if rest.startswith(b'[A'): return 'up'
+            if rest.startswith(b'[B'): return 'down'
+            return 'other'
+        if ch in (b'\r', b'\n'): return 'enter'
+        if ch == b'\x03':        return 'ctrl_c'
+        if ch == b'\x7f':        return 'backspace'
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
     return 'other'
 
 
 def clear_screen():
-    os.system("clear")
+    """Full terminal clear (used only for input prompts)."""
+    sys.stdout.write('\033[2J\033[H')
+    sys.stdout.flush()
 
 
 def draw_header():
-    print(f"{C_BLUE}       ▄▀▀▄       {C_RESET}")
-    print(f"{C_BLUE}      ▀▀▀▀▀▀      {C_RESET}")
-    print(f"{C_BLUE}     ▀▀▀▀▀▀▀▀     {C_WHITE}Antigravity Profiles  v{VERSION}{C_RESET}")
-    print(f"{C_BLUE}    ▄▀▀    ▀▀▄    {C_RESET}")
-    print(f"{C_BLUE}   ▄▀▀      ▀▀▄   {C_RESET}")
+    """Print the Antigravity logo and separator."""
+    _brand = "Antigravity Profiles"
+    _beta  = "(BETA)"
+    _pad   = " " * ((len(_brand) - len(_beta)) // 2)
+    print(f"       \033[38;2;237;125;49m▄\033[38;2;237;125;49m▀\033[38;2;225;85;53m▀\033[38;2;225;85;53m▄\033[0m       ")
+    print(f"      \033[38;2;226;166;59m▀\033[38;2;232;134;54m▀\033[38;2;237;125;49m▀\033[38;2;225;85;53m▀\033[38;2;211;64;71m▀\033[38;2;211;64;71m▀\033[0m      ")
+    print(f"     \033[38;2;125;180;82m▀\033[38;2;125;180;82m▀\033[38;2;161;179;71m▀\033[38;2;213;137;67m▀\033[38;2;225;85;53m▀\033[38;2;162;94;153m▀\033[38;2;162;94;153m▀\033[38;2;162;94;153m▀\033[0m     {C_WHITE}{_brand}  v{VERSION}{C_RESET}")
+    print(f"    \033[38;2;108;190;90m▄\033[38;2;71;135;214m▀\033[38;2;71;135;214m▀    \033[38;2;104;113;200m▀\033[38;2;100;102;203m▀\033[38;2;100;102;203m▄\033[0m    {C_YELLOW}{_pad}{_beta}{C_RESET}")
+    print(f"   \033[38;2;85;181;222m▄\033[38;2;71;135;214m▀\033[38;2;71;135;214m▀      \033[38;2;71;135;214m▀\033[38;2;71;135;214m▀\033[38;2;71;135;214m▄\033[0m   ")
     print(f"\n{C_GRAY}─────────────────────────────────────────────────────{C_RESET}\n")
+
+
+# ── Community screen ───────────────────────────────────────────────────────────
+
+def show_community():
+    """Interactive Build x community links screen."""
+    light = "\033[38;2;112;230;39m"
+    mid   = "\033[38;2;71;200;50m"
+    dark  = "\033[38;2;30;160;18m"
+
+    logo = [
+        f"     {light}█▄ ▄█{C_RESET}",
+        f"      {mid}▀█▀{C_RESET}",
+        f"     {dark}█▀ ▀█{C_RESET}",
+    ]
+
+    links = [
+        ("\uf099 X (Twitter)", "https://x.com/buildx_main"),
+        ("\uf2c6 Telegram",    "https://t.me/buildx_main"),
+        ("\uf281 Reddit",      "https://reddit.com/r/buildx_main"),
+        ("Go Back",            None),
+    ]
+
+    idx = 0
+    while True:
+        with TerminalBuffer():
+            draw_header()
+            for line in logo:
+                print(line)
+            print(f"\n {C_WHITE}Join the Build x Community!{C_RESET}\n")
+            for i, (label, url) in enumerate(links):
+                if i == idx:
+                    if url:
+                        print(f"  {C_BLUE}\u276f {label}{C_RESET}  \033[38;2;100;100;100m{url}\033[0m")
+                    else:
+                        print(f"  {C_BLUE}\u276f {C_GRAY}[x] {label}{C_RESET}")
+                else:
+                    if url:
+                        print(f"    {C_GRAY}{label}{C_RESET}  \033[38;2;100;100;100m{url}\033[0m")
+                    else:
+                        print(f"    {C_GRAY}[x] {label}{C_RESET}")
+            print(f"\n {C_GRAY}\u2191/\u2193 to move \u00b7 Enter to open \u00b7 Esc/Ctrl-C to go back{C_RESET}")
+
+        key = get_key()
+        if key == 'up':
+            idx = (idx - 1) % len(links)
+        elif key == 'down':
+            idx = (idx + 1) % len(links)
+        elif key == 'enter':
+            url = links[idx][1]
+            if url:
+                webbrowser.open(url)
+            else:
+                return
+        elif key in ('ctrl_c', 'other'):
+            return
 
 
 # ── Mode selection ─────────────────────────────────────────────────────────────
 
 def ask_mode():
-    """
-    Ask whether to run in isolated or unified mode.
-      isolated → separate HOME per profile — no shared history or config.
-      unified  → swap auth tokens only; history and config are shared.
-    Returns 'isolated' or 'unified'.
-    """
+    """Ask isolated vs unified. Returns 'isolated', 'unified', or 'EXIT'."""
     options = [
-        ("isolated", "separate HOME per profile — no shared history or config"),
-        ("unified",  "swap auth tokens only — history and config are shared"),
+        ("isolated", "Isolated", "[Each profile is fully separate]"),
+        ("unified",  "Unified",  "[Shared history]"),
+        ("join_us",  "",         ""),
+        ("exit",     "",         ""),
     ]
     idx = 0
-    sys.stdout.write("\033[?25l")
-    try:
-        while True:
-            clear_screen()
+    while True:
+        with TerminalBuffer():
             draw_header()
             print(f" {C_WHITE}Choose launch mode:{C_RESET}\n")
-            for i, (label, desc) in enumerate(options):
+            for i, (label, tag, desc) in enumerate(options):
                 if i == idx:
-                    print(f"  {C_BLUE}\u276f {C_WHITE}{label}{C_RESET}  {C_GRAY}{desc}{C_RESET}")
+                    if label == "exit":
+                        print(f"  {C_BLUE}\u276f {C_GRAY}[x] Exit{C_RESET}")
+                    elif label == "join_us":
+                        print(f"  {C_BLUE}\u276f {C_JOIN}[♥] Join Us{C_RESET}")
+                    else:
+                        print(f"  {C_BLUE}\u276f {C_WHITE}{tag}{C_RESET}  {C_GRAY}{desc}{C_RESET}")
                 else:
-                    print(f"    {C_GRAY}{label}{C_RESET}  {C_GRAY}{desc}{C_RESET}")
+                    if label == "exit":
+                        print(f"    {C_GRAY}[x] Exit{C_RESET}")
+                    elif label == "join_us":
+                        print(f"    {C_JOIN}[♥] Join Us{C_RESET}")
+                    else:
+                        print(f"    {C_GRAY}{tag}{C_RESET}  {C_GRAY}{desc}{C_RESET}")
             print(f"\n {C_GRAY}\u2191/\u2193 to move \u00b7 Enter to confirm{C_RESET}")
 
-            key = get_key()
-            if key == 'up':
-                idx = max(0, idx - 1)
-            elif key == 'down':
-                idx = min(len(options) - 1, idx + 1)
-            elif key == 'enter':
-                return options[idx][0]
-            elif key == 'ctrl_c':
-                sys.stdout.write("\033[?25h")
-                sys.exit(0)
-    finally:
-        sys.stdout.write("\033[?25h")
+        key = get_key()
+        if key == 'up':
+            idx = (idx - 1) % len(options)
+        elif key == 'down':
+            idx = (idx + 1) % len(options)
+        elif key == 'enter':
+            lbl = options[idx][0]
+            if lbl == "exit":
+                return "EXIT"
+            elif lbl == "join_us":
+                show_community()
+            else:
+                return lbl
+        elif key == 'ctrl_c':
+            return "EXIT"
 
 
 # ── Interactive profile menu ───────────────────────────────────────────────────
 
 def interactive_menu(profiles):
+    """Full TUI for profile selection, creation, rename, delete."""
     mode = "main"
     current_idx = 0
+    # Pre-build options so they're always defined before get_key() is called
+    options = []
 
-    sys.stdout.write("\033[?25l")
-    try:
-        while True:
-            clear_screen()
+    def build_options():
+        nonlocal options
+        if mode == "main":
+            options = profiles + [
+                "[+] Add Profile",
+                "[~] Rename Profile",
+                "[-] Delete Profile",
+                f"{C_JOIN}[♥] Join Us{C_RESET}",
+                f"{C_GRAY}[x] Exit{C_RESET}",
+            ]
+        elif mode == "delete":
+            options = profiles + [f"{C_GRAY}[<] Back{C_RESET}"]
+        elif mode == "rename":
+            options = profiles + [f"{C_GRAY}[<] Back{C_RESET}"]
+        elif mode == "create":
+            options = [f"{C_GREEN}[>] Enter Profile Name{C_RESET}", f"{C_GRAY}[<] Back{C_RESET}"]
+
+    while True:
+        build_options()
+
+        with TerminalBuffer():
             draw_header()
-
             if mode == "main":
-                options = profiles + [
-                    f"{C_GREEN}[+] Add Profile{C_RESET}",
-                    f"{C_RED}[-] Delete Profile{C_RESET}",
-                    f"{C_GRAY}[x] Exit{C_RESET}",
-                ]
                 print(f" {C_WHITE}Select a profile to launch:{C_RESET}\n")
             elif mode == "delete":
-                options = profiles + [f"{C_GRAY}[<] Back{C_RESET}"]
                 print(f" {C_RED}Select a profile to delete:{C_RESET}\n")
                 if not profiles:
                     print(f" {C_GRAY}  (No profiles exist yet.){C_RESET}\n")
+            elif mode == "rename":
+                print(f" {C_YELLOW}Select a profile to rename:{C_RESET}\n")
+                if not profiles:
+                    print(f" {C_GRAY}  (No profiles exist yet.){C_RESET}\n")
             elif mode == "create":
-                options = [f"{C_GREEN}[>] Enter Profile Name{C_RESET}", f"{C_GRAY}[<] Back{C_RESET}"]
                 print(f" {C_GREEN}Create New Profile:{C_RESET}\n")
 
             for i, opt in enumerate(options):
+                suffix = ""
+                plain = re.sub(r'\033\[[^m]*m', '', opt)   # strip ANSI for email lookup
+                if mode == "main" and i < len(profiles):
+                    email = get_profile_email(opt)
+                    if email:
+                        suffix = f"  {C_GRAY}[{email}]{C_RESET}"
                 if i == current_idx:
-                    print(f"  {C_BLUE}\u276f {opt}{C_RESET}")
+                    print(f"  {C_BLUE}\u276f {opt}{suffix}{C_RESET}")
                 else:
-                    print(f"    {opt}")
-
-            key = get_key()
-            if key == 'up':
-                current_idx = max(0, current_idx - 1)
-            elif key == 'down':
-                current_idx = min(len(options) - 1, current_idx + 1)
-            elif key == 'enter':
-                if mode == "main":
-                    if current_idx < len(profiles):
-                        return profiles[current_idx]
-                    elif current_idx == len(profiles):
-                        mode = "create"
-                        current_idx = 0
-                    elif current_idx == len(profiles) + 1:
-                        mode = "delete"
-                        current_idx = 0
-                    elif current_idx == len(profiles) + 2:
-                        sys.exit(0)
-                elif mode == "create":
-                    if current_idx == 0:
-                        sys.stdout.write("\033[?25h")
-                        raw = input(f"\n {C_WHITE}Name:{C_RESET} ")
-                        choice = sanitize_name(raw)
-                        if choice is None:
-                            print(f"\n {C_RED}Invalid name. Use only letters, digits, spaces, hyphens, underscores.{C_RESET}")
-                            import time; time.sleep(1.5)
-                            sys.stdout.write("\033[?25l")
-                            continue
-                        return choice
+                    if not opt.startswith('\033'):
+                        print(f"    {C_GRAY}{opt}{C_RESET}{suffix}")
                     else:
-                        mode = "main"
-                        current_idx = 0
-                elif mode == "delete":
-                    if current_idx < len(profiles):
-                        p_to_delete = profiles[current_idx]
-                        sys.stdout.write("\033[?25h")
+                        print(f"    {opt}{suffix}")
+
+            print(f"\n {C_GRAY}\u2191/\u2193 to move \u00b7 Enter to select{C_RESET}")
+
+        key = get_key()
+
+        if key == 'up':
+            current_idx = (current_idx - 1) % len(options)
+        elif key == 'down':
+            current_idx = (current_idx + 1) % len(options)
+        elif key == 'ctrl_c':
+            return "EXIT"
+        elif key == 'enter':
+            if mode == "main":
+                n = len(profiles)
+                if current_idx < n:
+                    return profiles[current_idx]
+                elif current_idx == n:        # Add Profile
+                    mode = "create"
+                    current_idx = 0
+                elif current_idx == n + 1:    # Rename Profile
+                    mode = "rename"
+                    current_idx = 0
+                elif current_idx == n + 2:    # Delete Profile
+                    mode = "delete"
+                    current_idx = 0
+                elif current_idx == n + 3:    # Join Us
+                    show_community()
+                elif current_idx == n + 4:    # Exit
+                    return "EXIT"
+
+            elif mode == "create":
+                if current_idx == 0:
+                    # Exit alt-screen for input, then restore
+                    sys.stdout.write("\033[?1049l\033[?25h")
+                    sys.stdout.flush()
+                    try:
                         clear_screen()
                         draw_header()
-                        ans = input(f" {C_RED}Permanently delete '{p_to_delete}'? (y/N): {C_RESET}").strip().lower()
-                        if ans == 'y':
-                            target = PROFILES_DIR / p_to_delete
-                            if target.exists():
-                                shutil.rmtree(target)
-                            profiles.remove(p_to_delete)
-                        sys.stdout.write("\033[?25l")
-                        mode = "main"
-                        current_idx = 0
-                    else:
-                        mode = "main"
-                        current_idx = 0
-            elif key == 'ctrl_c':
-                sys.stdout.write("\033[?25h")
-                sys.exit(0)
-    finally:
-        sys.stdout.write("\033[?25h")
-        clear_screen()
+                        raw = input(f" {C_GREEN}New profile name:{C_RESET} ")
+                    except (EOFError, KeyboardInterrupt):
+                        raw = ""
+                    sys.stdout.write("\033[?1049h\033[?25l")
+                    sys.stdout.flush()
+                    choice = sanitize_name(raw)
+                    if not choice:
+                        # flash error — will be overwritten on next render
+                        import time; time.sleep(1.2)
+                        continue
+                    if (PROFILES_DIR / choice).exists():
+                        import time; time.sleep(1.2)
+                        continue
+                    return choice
+                else:
+                    mode = "main"
+                    current_idx = 0
+
+            elif mode == "rename":
+                if current_idx < len(profiles):
+                    p_old = profiles[current_idx]
+                    sys.stdout.write("\033[?1049l\033[?25h")
+                    sys.stdout.flush()
+                    try:
+                        clear_screen()
+                        draw_header()
+                        raw = input(f" {C_YELLOW}Rename '{p_old}' to:{C_RESET} ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        raw = ""
+                    sys.stdout.write("\033[?1049h\033[?25l")
+                    sys.stdout.flush()
+                    new_name = sanitize_name(raw)
+                    if new_name and not (PROFILES_DIR / new_name).exists():
+                        (PROFILES_DIR / p_old).rename(PROFILES_DIR / new_name)
+                        profiles[profiles.index(p_old)] = new_name
+                        profiles.sort()
+                    mode = "main"
+                    current_idx = 0
+                else:
+                    mode = "main"
+                    current_idx = 0
+
+            elif mode == "delete":
+                if current_idx < len(profiles):
+                    p_del = profiles[current_idx]
+                    sys.stdout.write("\033[?1049l\033[?25h")
+                    sys.stdout.flush()
+                    try:
+                        clear_screen()
+                        draw_header()
+                        ans = input(f" {C_RED}Permanently delete '{p_del}'? (y/N):{C_RESET} ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        ans = ""
+                    sys.stdout.write("\033[?1049h\033[?25l")
+                    sys.stdout.flush()
+                    if ans == 'y':
+                        target = PROFILES_DIR / p_del
+                        if target.exists():
+                            shutil.rmtree(target)
+                        profiles.remove(p_del)
+                        current_idx = min(current_idx, max(0, len(profiles) - 1))
+                    mode = "main"
+                    current_idx = 0
+                else:
+                    mode = "main"
+                    current_idx = 0
 
     return None
 
@@ -251,19 +461,14 @@ def interactive_menu(profiles):
 # ── Auth file management ───────────────────────────────────────────────────────
 
 def _migrate_old_tokens(profile_dir):
-    """
-    One-time migration: move tokens from the old flat storage
-    (profile_dir/antigravity-oauth-token) to the new mirror structure
-    (profile_dir/.gemini/antigravity-cli/antigravity-oauth-token).
-    Safe to call on every launch — no-ops if already migrated.
-    """
-    old_name_to_rel = {
+    """Move tokens from old flat layout to the .gemini mirror structure."""
+    old_names = {
         "antigravity-oauth-token": _TOKEN_RELPATHS[0],
         "oauth_creds.json":        _TOKEN_RELPATHS[1],
         "google_accounts.json":    _TOKEN_RELPATHS[2],
     }
-    for old_name, rel in old_name_to_rel.items():
-        old = profile_dir / old_name
+    for fname, rel in old_names.items():
+        old = profile_dir / fname
         new = profile_dir / rel
         if old.exists() and not new.exists():
             new.parent.mkdir(parents=True, exist_ok=True)
@@ -271,11 +476,7 @@ def _migrate_old_tokens(profile_dir):
 
 
 def swap_in_profile(profile_dir):
-    """
-    Unified mode: copy this profile's tokens into the live HOME.
-    Reads from profile_dir/.gemini/... → writes to REAL_HOME/.gemini/...
-    Backs up whatever is currently live so it can be restored.
-    """
+    """Unified mode: copy profile tokens into live HOME."""
     for rel in _TOKEN_RELPATHS:
         src = profile_dir / rel
         dst = REAL_HOME / rel
@@ -285,18 +486,13 @@ def swap_in_profile(profile_dir):
                 shutil.copy2(dst, dst.with_suffix(".agyp-backup"))
             shutil.copy2(src, dst)
         else:
-            # Profile has no token for this file — remove the live copy so
-            # agy doesn't reuse the previous account's credentials.
             if dst.exists():
                 shutil.copy2(dst, dst.with_suffix(".agyp-backup"))
                 dst.unlink()
 
 
 def save_back_profile(profile_dir):
-    """
-    Unified mode: copy updated tokens from the live HOME back into the profile.
-    Called after the agy session ends so the profile stays up-to-date.
-    """
+    """Unified mode: save updated tokens back into profile after session ends."""
     for rel in _TOKEN_RELPATHS:
         src = REAL_HOME / rel
         dst = profile_dir / rel
@@ -306,7 +502,6 @@ def save_back_profile(profile_dir):
 
 
 def set_last_active(profile_name):
-    """Persist which profile is currently active."""
     try:
         PROFILES_DIR.mkdir(parents=True, exist_ok=True)
         LAST_ACTIVE_FILE.write_text(profile_name, encoding="utf-8")
@@ -323,19 +518,14 @@ def clear_last_active():
 
 
 def inside_agy_session():
-    """
-    Return True if agyp is being run from inside an existing agy session.
-    agy sets HOME to ~/.agy_accounts/N before launching, so we check for that.
-    """
-    home = os.environ.get("HOME", "")
-    return ".agy_accounts" in home
+    """True if we're running inside an existing agy sandbox."""
+    return ".agy_accounts" in os.environ.get("HOME", "")
 
 
 # ── agy binary resolution ──────────────────────────────────────────────────────
 
 def _resolve_agy():
-    """Return path to the agy binary, honoring a custom CLI path config."""
-    import json
+    """Return path to the agy binary, respecting custom config."""
     custom = None
     try:
         if CONFIG_FILE.exists():
@@ -347,127 +537,193 @@ def _resolve_agy():
     return shutil.which("agy")
 
 
-
 # ── Launch helpers ─────────────────────────────────────────────────────────────
 
 def _bash_exec(env, cmd_str):
-    """
-    Replace this process with bash -i sourcing .bashrc, then running cmd_str.
-    os.execvpe means agyp's PID is gone — no Python parent left to conflict with agy.
-    """
+    """Replace this process with bash running cmd_str (os.execvpe — never returns)."""
     bash = shutil.which("bash") or "/bin/bash"
     os.execvpe(bash, [bash, "-i", "-c", cmd_str], env)
 
 
 def _bash_run(env, cmd_str):
-    """
-    Run cmd_str in a bash -i subprocess and WAIT for it to finish.
-    Used for unified mode so we can call save_back_profile after agy exits.
-    """
+    """Run cmd_str in a bash subprocess and wait for it to finish."""
     bash = shutil.which("bash") or "/bin/bash"
     return subprocess.call([bash, "-i", "-c", cmd_str], env=env)
 
 
 def launch_isolated(profile, args):
-    """
-    Launch agy with a completely isolated HOME environment.
-    The profile directory IS $HOME — no shared history, config, or credentials.
-    Tokens live at profile_dir/.gemini/... naturally (agy writes them there).
-    """
+    """Launch agy with a fully isolated HOME = profile directory."""
+    agy_bin = _resolve_agy()
+    if not agy_bin:
+        print(f"{C_RED}Error: 'agy' not found in PATH. Is Antigravity installed?{C_RESET}")
+        sys.exit(1)
+
     profile_dir = PROFILES_DIR / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
-
-    # Migrate any old flat-stored tokens to the .gemini mirror structure
     _migrate_old_tokens(profile_dir)
 
     print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}isolated{C_BLUE}]{C_RESET}")
     print(f"{C_GREEN}Launching isolated environment...{C_RESET}\n")
 
-    # Set isolated HOME; clear XDG so nothing leaks from the real home
     env = os.environ.copy()
     env["HOME"] = str(profile_dir)
     for xdg in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]:
         env.pop(xdg, None)
 
     extra = " ".join(f"'{a}'" for a in args) if args else ""
-    # 'command agy' calls the binary directly (not the bash wrapper function).
-    # HOME is already set in env to the isolated profile_dir.
-    cmd_str = f"command agy {extra}".strip()
-
-    _bash_exec(env, cmd_str)
+    _bash_exec(env, f"'{agy_bin}' {extra}".strip())
     # os.execvpe never returns
 
 
 def launch_unified(profile, args):
-    """
-    Launch agy using the real HOME but with this profile's auth tokens.
-    History, config, and cache are shared. Only credentials are swapped.
+    """Launch agy with shared HOME but this profile's auth tokens."""
+    agy_bin = _resolve_agy()
+    if not agy_bin:
+        print(f"{C_RED}Error: 'agy' not found in PATH. Is Antigravity installed?{C_RESET}")
+        sys.exit(1)
 
-    NOTE: Unified mode should be used from OUTSIDE an agy session.
-    If run from inside agy, launching a second agy with the same HOME
-    may cause a session conflict — use isolated mode instead.
-    """
     profile_dir = PROFILES_DIR / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
-
-    # Migrate any old flat-stored tokens first
     _migrate_old_tokens(profile_dir)
 
     if inside_agy_session():
-        print(f"\n{C_YELLOW}Warning: you are inside an existing agy session.{C_RESET}")
-        print(f"{C_GRAY}Launching a second agy with the same HOME may cause a session conflict.")
-        print(f"Consider using isolated mode instead.{C_RESET}")
-        print()
+        print(f"\n{C_YELLOW}Warning: already inside an agy session. A conflict may occur.{C_RESET}")
+        print(f"{C_GRAY}Consider using isolated mode instead.{C_RESET}\n")
 
     print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}unified{C_BLUE}]{C_RESET}")
-
-    # Copy this profile's tokens into the live HOME
     swap_in_profile(profile_dir)
     set_last_active(profile)
-
     print(f"{C_GREEN}Auth tokens swapped. Launching...{C_RESET}\n")
 
     extra = " ".join(f"'{a}'" for a in args) if args else ""
-    cmd_str = f"command agy {extra}".strip()
-
-    # Use subprocess (not exec) so we can save tokens back after agy exits
     try:
-        _bash_run(os.environ.copy(), cmd_str)
+        _bash_run(os.environ.copy(), f"'{agy_bin}' {extra}".strip())
     finally:
-        # Always save updated tokens back regardless of how agy exits
         save_back_profile(profile_dir)
         clear_last_active()
 
     sys.exit(0)
 
 
+# ── Non-interactive subcommands ────────────────────────────────────────────────
+
+def _print_help():
+    draw_header()
+    print(f"{C_WHITE}Usage:{C_RESET}\n")
+    print(f"  {C_WHITE}agyp{C_RESET}                       Launch interactive profile manager")
+    print(f"  {C_WHITE}agyp <profile>{C_RESET}             Launch a named profile directly (isolated mode)")
+    print(f"  {C_WHITE}agyp <profile> [args...]{C_RESET}   Pass extra args to agy")
+    print(f"  {C_WHITE}agyp list{C_RESET}                  List all saved profiles")
+    print(f"  {C_WHITE}agyp rename <old> <new>{C_RESET}    Rename a profile")
+    print(f"  {C_WHITE}agyp --version{C_RESET}             Show version")
+    print(f"  {C_WHITE}agyp --help{C_RESET}                Show this help")
+    print(f"\n{C_GRAY}Profiles stored in: ~/agyp-profiles/{C_RESET}\n")
+
+
+def _cmd_list():
+    print()   # push past the shell prompt line
+    if not PROFILES_DIR.exists():
+        print(f"  {C_GRAY}No profiles yet. Run 'agyp' to create one.{C_RESET}\n")
+        return
+    profiles = sorted([d.name for d in PROFILES_DIR.iterdir() if d.is_dir()])
+    if not profiles:
+        print(f"  {C_GRAY}No profiles yet. Run 'agyp' to create one.{C_RESET}\n")
+        return
+    print(f"  {C_WHITE}Saved profiles:{C_RESET}\n")
+    for p in profiles:
+        email = get_profile_email(p)
+        suffix = f"  {C_GRAY}[{email}]{C_RESET}" if email else ""
+        print(f"  {C_BLUE}·{C_RESET} {p}{suffix}")
+    print()
+
+
+def _cmd_rename(old_name, new_name):
+    old = sanitize_name(old_name)
+    new = sanitize_name(new_name)
+    if old is None:
+        print(f"{C_RED}Error: Invalid name '{old_name}'.{C_RESET}"); sys.exit(1)
+    if new is None:
+        print(f"{C_RED}Error: Invalid name '{new_name}'.{C_RESET}"); sys.exit(1)
+    src = PROFILES_DIR / old
+    dst = PROFILES_DIR / new
+    if not src.exists():
+        print(f"{C_RED}Error: Profile '{old}' does not exist.{C_RESET}"); sys.exit(1)
+    if dst.exists():
+        print(f"{C_RED}Error: Profile '{new}' already exists.{C_RESET}"); sys.exit(1)
+    src.rename(dst)
+    print(f"{C_GREEN}✓ Renamed '{old}' → '{new}'{C_RESET}")
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
+def _goodbye():
+    """Print the exit message cleanly after the alt-screen is closed."""
+    sys.stdout.write(f"\r\n  {C_JOIN}♥ Thanks for using Antigravity Profiles!{C_RESET}\r\n\r\n")
+    sys.stdout.flush()
+
+
 def main():
-    # Allow direct non-interactive launch: agyp <profile> [agy-args...]
-    # Defaults to isolated mode when called this way.
-    if len(sys.argv) >= 2:
-        argv_profile = sanitize_name(sys.argv[1])
-        if argv_profile is None:
-            print(f"{C_RED}Error: Invalid profile name '{sys.argv[1]}'. "
-                  f"Use only letters, digits, spaces, hyphens, underscores.{C_RESET}")
-            sys.exit(1)
-        launch_isolated(argv_profile, sys.argv[2:])
-        return
+    argv = sys.argv[1:]
 
-    # Step 1: Ask isolated or unified
-    mode = ask_mode()
-
-    # Step 2: Pick / create profile
-    profiles = []
-    if PROFILES_DIR.exists():
-        profiles = sorted([d.name for d in PROFILES_DIR.iterdir() if d.is_dir()])
-
-    selected_profile = interactive_menu(profiles)
-    if not selected_profile:
+    if argv and argv[0] in ("--version", "-v"):
+        print(f"agyp v{VERSION}")
         sys.exit(0)
 
-    # Step 3: Launch in chosen mode
+    if argv and argv[0] in ("--help", "-h"):
+        _print_help()
+        sys.exit(0)
+
+    if argv and argv[0] == "list":
+        _cmd_list()
+        return
+
+    if argv and argv[0] == "rename":
+        if len(argv) != 3:
+            print(f"{C_RED}Usage: agyp rename <old-name> <new-name>{C_RESET}")
+            sys.exit(1)
+        _cmd_rename(argv[1], argv[2])
+        return
+
+    # Direct profile launch: agyp <profile> [agy-args...]
+    if argv:
+        argv_profile = sanitize_name(argv[0])
+        if argv_profile is None:
+            print(f"{C_RED}Error: Invalid profile name '{argv[0]}'.{C_RESET}")
+            sys.exit(1)
+        launch_isolated(argv_profile, argv[1:])
+        return
+
+    # ── Interactive TUI ────────────────────────────────────────────────────────
+    sys.stdout.write("\033[?1049h\033[?25l")   # enter alt-screen, hide cursor
+    sys.stdout.flush()
+
+    mode = None
+    selected_profile = None
+
+    try:
+        mode = ask_mode()
+        if mode == "EXIT":
+            return  # falls through to finally → goodbye
+
+        profiles = []
+        if PROFILES_DIR.exists():
+            profiles = sorted([d.name for d in PROFILES_DIR.iterdir() if d.is_dir()])
+
+        selected_profile = interactive_menu(profiles)
+        if selected_profile == "EXIT" or not selected_profile:
+            return  # falls through to finally → goodbye
+
+    finally:
+        # Always restore terminal before doing ANYTHING else
+        sys.stdout.write("\033[?1049l\033[?25h")
+        sys.stdout.flush()
+
+    # Print goodbye only on clean exit (not when launching a profile)
+    if not selected_profile or selected_profile == "EXIT":
+        _goodbye()
+        os._exit(0)
+
+    # Step 3: launch
     if mode == "isolated":
         launch_isolated(selected_profile, [])
     else:

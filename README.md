@@ -15,7 +15,6 @@ Switch between multiple Antigravity (`agy`) accounts instantly — no logging ou
 ![Linux](https://img.shields.io/badge/Linux-✓-blue?style=flat-square&logo=linux&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-✓-blue?style=flat-square&logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)
-![CLI only](https://img.shields.io/badge/interface-CLI_only-blue?style=flat-square)
 ![Accounts](https://img.shields.io/badge/accounts-unlimited-green?style=flat-square)
 
 </div>
@@ -129,3 +128,18 @@ No additional packages needed.
 - Profile names only allow letters, numbers, spaces, hyphens, underscores — no funny business
 
 ---
+
+## Built by
+
+Made by **[pr4xh4r](https://github.com/pr4xh4r)** — part of the **[Build x](https://x.com/buildx_main)** community.
+
+Join us:
+- X (Twitter): https://x.com/buildx_main
+- Telegram: https://t.me/buildx_main
+- Reddit: https://reddit.com/r/buildx_main
+
+---
+
+## License
+
+MIT © [pr4xh4r](https://github.com/pr4xh4r)
