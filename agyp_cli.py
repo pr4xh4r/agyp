@@ -202,10 +202,11 @@ def show_community():
     ]
 
     links = [
-        ("\uf099 X (Twitter)", "https://x.com/buildx_main"),
-        ("\uf2c6 Telegram",    "https://t.me/buildx_main"),
-        ("\uf281 Reddit",      "https://reddit.com/r/buildx_main"),
-        ("Go Back",            None),
+        ("\uf099 X (Twitter) ", "https://x.com/buildx_main"),
+        ("\uf2c6 Telegram    ", "https://t.me/buildx_main"),
+        ("\uf281 Reddit      ", "https://reddit.com/r/buildx_main"),
+        ("\uf392 Discord     ", "https://discord.gg/ShZRBUZ7AX"),
+        ("Go Back",             None),
     ]
 
     idx = 0
@@ -248,7 +249,7 @@ def show_community():
 def ask_mode():
     """Ask isolated vs unified. Returns 'isolated', 'unified', or 'EXIT'."""
     options = [
-        ("isolated", "Isolated", "[Each profile is fully separate]"),
+        ("isolated", "Isolated", "[Each profile is fully separated]"),
         ("unified",  "Unified",  "[Shared history]"),
         ("join_us",  "",         ""),
         ("exit",     "",         ""),
@@ -294,7 +295,7 @@ def ask_mode():
 
 # ── Interactive profile menu ───────────────────────────────────────────────────
 
-def interactive_menu(profiles):
+def interactive_menu(profiles, launch_mode="isolated"):
     """Full TUI for profile selection, creation, rename, delete."""
     mode = "main"
     current_idx = 0
@@ -324,7 +325,8 @@ def interactive_menu(profiles):
         with TerminalBuffer():
             draw_header()
             if mode == "main":
-                print(f" {C_WHITE}Select a profile to launch:{C_RESET}\n")
+                mode_label = f"\033[38;2;112;230;39mIsolated\033[0m" if launch_mode == "isolated" else f"{C_YELLOW}Unified{C_RESET}"
+                print(f" {C_WHITE}Select a profile to launch:{C_RESET}  {C_GRAY}mode:{C_RESET} {mode_label}\n")
             elif mode == "delete":
                 print(f" {C_RED}Select a profile to delete:{C_RESET}\n")
                 if not profiles:
@@ -697,31 +699,29 @@ def main():
     sys.stdout.write("\033[?1049h\033[?25l")   # enter alt-screen, hide cursor
     sys.stdout.flush()
 
-    mode = None
-    selected_profile = None
-
+    exiting = False
     try:
         mode = ask_mode()
         if mode == "EXIT":
-            return  # falls through to finally → goodbye
+            exiting = True
+            return
 
         profiles = []
         if PROFILES_DIR.exists():
             profiles = sorted([d.name for d in PROFILES_DIR.iterdir() if d.is_dir()])
 
-        selected_profile = interactive_menu(profiles)
+        selected_profile = interactive_menu(profiles, launch_mode=mode)
         if selected_profile == "EXIT" or not selected_profile:
-            return  # falls through to finally → goodbye
+            exiting = True
+            return
 
     finally:
-        # Always restore terminal before doing ANYTHING else
+        # Always restore terminal FIRST
         sys.stdout.write("\033[?1049l\033[?25h")
         sys.stdout.flush()
-
-    # Print goodbye only on clean exit (not when launching a profile)
-    if not selected_profile or selected_profile == "EXIT":
-        _goodbye()
-        os._exit(0)
+        if exiting:
+            _goodbye()
+            os._exit(0)
 
     # Step 3: launch
     if mode == "isolated":
