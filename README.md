@@ -23,7 +23,7 @@
 
 ---
 
-## 💡 Why does this exist?
+## Why does this exist?
 
 You are deep into a coding session with Antigravity (`agy`) and suddenly... **you hit the rate limit.** 
 Normally, you'd have to log out, log into a different Google account, and lose your entire conversation history and context.
@@ -32,18 +32,18 @@ Normally, you'd have to log out, log into a different Google account, and lose y
 
 With `agyp`, you can create **unlimited profiles**. Hit a limit? Just open `agyp`, switch to your backup account, and keep coding. 
 
-## ✨ Features
+## Features
 
-- 🚀 **Instant Account Switching:** Jump between work, personal, or backup accounts in seconds.
-- 🛡️ **Fully Isolated Sessions (Default):** Each profile gets its own separate history, workspace, and auth. Nothing leaks.
-- 🔗 **Unified Mode:** Want to share your conversation history across different accounts? Unified mode swaps only the auth tokens.
-- 💻 **Beautiful Interactive TUI:** Flicker-free, arrow-key navigation. Add, rename, and delete profiles right from the terminal.
-- 📧 **Smart Labels:** Automatically displays the authenticated Google email next to each profile.
+- ➤ **Instant Account Switching:** Jump between work, personal, or backup accounts in seconds.
+- ⚐ **Fully Isolated Sessions (Default):** Each profile gets its own separate history, workspace, and auth. Nothing leaks.
+- ∞ **Unified Mode:** Want to share your conversation history across different accounts? Unified mode swaps only the auth tokens.
+- ▣ **Beautiful Interactive TUI:** Flicker-free, arrow-key navigation. Add, rename, and delete profiles right from the terminal.
+- ✉ **Smart Labels:** Automatically displays the authenticated Google email next to each profile.
 - ⚡ **Zero Dependencies:** Built in pure Python. Extremely lightweight and fast (~150ms startup).
 
 ---
 
-## 📦 Installation
+## Installation
 
 **Linux**
 ```bash
@@ -63,7 +63,7 @@ bash install_mac.sh
 
 ---
 
-## 🛠️ Usage
+## Usage
 
 Just run:
 ```bash
@@ -78,16 +78,16 @@ You'll be greeted by an interactive menu to choose your launch mode and select a
 
 ---
 
-## 🤝 Built by
+## Built by
 
 Made by **[pr4xh4r](https://github.com/pr4xh4r)** — proud member of the **[Build x](https://x.com/buildx_main)** community.
 
 Join us:
-- 𝕏 (Twitter): [x.com/buildx_main](https://x.com/buildx_main)
-- 💬 Telegram: [t.me/buildx_main](https://t.me/buildx_main)
-- 👽 Reddit: [r/buildx_main](https://reddit.com/r/buildx_main)
-- 👾 Discord: [discord.gg/ShZRBUZ7AX](https://discord.gg/ShZRBUZ7AX)
+- ❯ X (Twitter): [x.com/buildx_main](https://x.com/buildx_main)
+- ❯ Telegram: [t.me/buildx_main](https://t.me/buildx_main)
+- ❯ Reddit: [r/buildx_main](https://reddit.com/r/buildx_main)
+- ❯ Discord: [discord.gg/ShZRBUZ7AX](https://discord.gg/ShZRBUZ7AX)
 
-## 📄 License
+## License
 
 MIT © [pr4xh4r](https://github.com/pr4xh4r)
