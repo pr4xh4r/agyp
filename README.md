@@ -8,7 +8,7 @@
    ▄▀▀      ▀▀▄  
 </pre>
 
-# Antigravity Profiles (`agyp`)
+# Antigravity Profiles (`agyp`) **BETA**
 
 **Manage unlimited Antigravity (`agy`) accounts from a single terminal.**
 
