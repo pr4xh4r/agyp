@@ -477,6 +477,63 @@ def _migrate_old_tokens(profile_dir):
             shutil.move(str(old), str(new))
 
 
+# ── Isolated-mode token persistence ───────────────────────────────────────────
+# agy uses the $HOME env var for its AppDataDir (confirmed: when HOME=<profile_dir>,
+# AppDataDir = <profile_dir>/.gemini/antigravity-cli/).  This means tokens written
+# during a session land at:
+#   <profile_dir>/.gemini/antigravity-cli/antigravity-oauth-token
+# which is exactly where agyp expects to find them.
+#
+# HOWEVER, when agyp itself is running inside an existing agy session (which changes
+# HOME to .agy_accounts/N), there's a risk that any token refresh also lands
+# inside that outer sandbox rather than the profile.  We run a broad post-session
+# sweep to always find the newest token and persist it into the profile's canonical
+# location so the next launch starts logged in.
+
+def _collect_token_candidates(profile_dir):
+    """Return all paths where agy may have written a token during the session."""
+    candidates = []
+    # Primary: direct inside profile HOME (normal isolated mode)
+    for rel in _TOKEN_RELPATHS:
+        candidates.append(profile_dir / rel)
+    # Secondary: inside any .agy_accounts sub-sandbox created within profile_dir
+    agy_inner = profile_dir / ".agy_accounts"
+    if agy_inner.exists():
+        for slot in agy_inner.iterdir():
+            if slot.is_dir():
+                for rel in _TOKEN_RELPATHS:
+                    candidates.append(slot / rel)
+    return candidates
+
+
+def _harvest_newest_token(profile_dir, session_start_ts):
+    """After a session, find the newest written token and save to canonical paths.
+
+    Scans all candidate locations (profile_dir and any .agy_accounts sub-dirs
+    created inside it).  Only copies files modified AFTER session start so we
+    never overwrite a good saved token with a stale one.
+    """
+    for rel in _TOKEN_RELPATHS:
+        canonical = profile_dir / rel
+        best_src  = None
+        best_mtime = session_start_ts  # only accept files newer than session start
+
+        for candidate in _collect_token_candidates(profile_dir):
+            if candidate.name != canonical.name:
+                continue
+            try:
+                mtime = candidate.stat().st_mtime
+                if mtime > best_mtime:
+                    best_mtime = mtime
+                    best_src   = candidate
+            except OSError:
+                pass
+
+        if best_src and best_src != canonical:
+            canonical.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(best_src, canonical)
+
+
 def swap_in_profile(profile_dir):
     """Unified mode: copy profile tokens into live HOME."""
     for rel in _TOKEN_RELPATHS:
@@ -554,7 +611,15 @@ def _bash_run(env, cmd_str):
 
 
 def launch_isolated(profile, args):
-    """Launch agy with a fully isolated HOME = profile directory."""
+    """Launch agy with a fully isolated HOME = profile directory.
+
+    Token persistence: agy uses $HOME (env var) as its AppDataDir base, so tokens
+    are read from and written to <profile_dir>/.gemini/antigravity-cli/.  We run
+    agy as a subprocess (not os.execvpe) so this process survives to sweep and
+    persist the refreshed token back into the profile after every session.
+    """
+    import time
+
     agy_bin = _resolve_agy()
     if not agy_bin:
         print(f"{C_RED}Error: 'agy' not found in PATH. Is Antigravity installed?{C_RESET}")
@@ -567,14 +632,23 @@ def launch_isolated(profile, args):
     print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}isolated{C_BLUE}]{C_RESET}")
     print(f"{C_GREEN}Launching isolated environment...{C_RESET}\n")
 
+    session_start_ts = time.time()
+
     env = os.environ.copy()
     env["HOME"] = str(profile_dir)
     for xdg in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]:
         env.pop(xdg, None)
 
     extra = " ".join(f"'{a}'" for a in args) if args else ""
-    _bash_exec(env, f"'{agy_bin}' {extra}".strip())
-    # os.execvpe never returns
+    try:
+        # subprocess.call (not os.execvpe) — this process survives to save tokens.
+        _bash_run(env, f"'{agy_bin}' {extra}".strip())
+    finally:
+        # Sweep all candidate token locations and persist the newest one into
+        # the profile's canonical path.  Runs even on crash or Ctrl-C.
+        _harvest_newest_token(profile_dir, session_start_ts)
+
+    sys.exit(0)
 
 
 def launch_unified(profile, args):
