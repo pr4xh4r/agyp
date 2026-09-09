@@ -47,7 +47,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -343,6 +343,81 @@ def _preseed_agy_slots(profile_dir):
         pass
 
 
+
+# ── Auth status helpers ────────────────────────────────────────────────────────
+
+def _is_fresh_profile(profile_dir):
+    """Return True if this profile has no saved auth tokens (first-time use)."""
+    return not any((profile_dir / rel).exists() for rel in _TOKEN_RELPATHS)
+
+
+def _deep_clear_real_home_auth():
+    """Aggressively clear ALL credential-related files from the real ~/.gemini/
+    before launching a fresh profile.
+
+    We back up the 3 known token files AND any other .json files inside
+    ~/.gemini/antigravity-cli/ — agy may create credential files we don't
+    know about. All are renamed to .agyp-backup so the next save_back_profile
+    call only writes what the new session actually authenticated.
+    """
+    for rel in _TOKEN_RELPATHS:
+        p = REAL_HOME / rel
+        if p.exists():
+            try:
+                shutil.copy2(p, p.with_suffix(".agyp-backup"))
+                p.unlink()
+            except Exception:
+                pass
+
+    # Broader sweep: any other .json files inside ~/.gemini/antigravity-cli/
+    cli_dir = REAL_HOME / ".gemini" / "antigravity-cli"
+    if cli_dir.exists():
+        try:
+            for f in cli_dir.iterdir():
+                if f.suffix == ".json" and "agyp-backup" not in f.name:
+                    try:
+                        shutil.copy2(f, f.with_name(f.stem + ".agyp-backup"))
+                        f.unlink()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
+def _warn_browser_account_switch(profile_name):
+    """Print an unmissable warning before a profile's first-ever login."""
+    border = C_YELLOW + "═" * 56 + C_RESET
+    print(f"\n{border}")
+    print(f"  {C_YELLOW}⚠  NEW PROFILE — FRESH GOOGLE SIGN-IN REQUIRED{C_RESET}")
+    print(f"{border}")
+    print(f"  A browser window will open for Google authentication.\n")
+    print(f"  {C_WHITE}To use a DIFFERENT account from your other profiles:{C_RESET}")
+    print(f"  {C_GREEN}1.{C_RESET} In the browser, click {C_WHITE}\"Use another account\"{C_RESET}")
+    print(f"  {C_GREEN}2.{C_RESET} Sign in with a {C_GREEN}different{C_RESET} Google account")
+    print(f"  {C_GREEN}3.{C_RESET} No extra account? Create one at {C_GRAY}accounts.google.com{C_RESET}\n")
+    print(f"  {C_GRAY}Signed in with the same account by accident?")
+    print(f"  Run: agyp reset-auth {profile_name}{C_RESET}")
+    print(f"{border}\n")
+
+
+def _warn_duplicate_email(profile_name, email):
+    """After a session, warn if this profile now shares an email with another."""
+    if not email:
+        return
+    duplicates = [
+        p for p in _list_profiles()
+        if p != profile_name and get_profile_email(p) == email
+    ]
+    if not duplicates:
+        return
+    others = ", ".join(duplicates)
+    print(f"\n{C_YELLOW}⚠  Same Google account in multiple profiles:{C_RESET}")
+    print(f"   {C_WHITE}{profile_name}{C_RESET} and {C_WHITE}{others}{C_RESET} share {C_GRAY}[{email}]{C_RESET}")
+    print(f"   {C_GRAY}Both profiles hit the same rate limits — defeating the purpose.{C_RESET}")
+    print(f"   Fix: run  {C_WHITE}agyp reset-auth {profile_name}{C_RESET}  then re-launch")
+    print(f"   and choose {C_GREEN}\"Use another account\"{C_RESET} in the browser.\n")
+
+
 # ── Auth file management ───────────────────────────────────────────────────────
 
 def _migrate_old_tokens(profile_dir):
@@ -533,8 +608,19 @@ def launch_isolated(profile, args):
     if not _load_meta(profile).get("created_at"):
         _save_meta(profile, created_at=datetime.now().isoformat())
 
+    fresh = _is_fresh_profile(profile_dir)
+
     print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}isolated{C_BLUE}]{C_RESET}")
-    print(f"{C_GREEN}Launching isolated environment...{C_RESET}\n")
+    print(f"{C_GREEN}Launching isolated environment...{C_RESET}")
+
+    if fresh:
+        # Show unmissable instructions BEFORE the browser opens
+        _warn_browser_account_switch(profile)
+        # Aggressively clear ALL real-home credentials (not just the 3 we know)
+        # so agy cannot silently reuse a cached account from a previous session.
+        _deep_clear_real_home_auth()
+    else:
+        print()
 
     session_start_ts = time.time()
 
@@ -558,15 +644,18 @@ def launch_isolated(profile, args):
         # subprocess.call (not os.execvpe) — this process survives to save tokens.
         _bash_run(env, f"'{agy_bin}' {extra}".strip())
     finally:
-        # Save tokens from real home → profile (agy Path.home() writes)
+        # Save tokens from real home → profile (captures agy's Path.home() writes)
         save_back_profile(profile_dir)
         clear_last_active()
-        # Also harvest tokens written relative to $HOME override
+        # Also harvest tokens written relative to the $HOME override
         _harvest_newest_token(profile_dir, session_start_ts)
-        # Persist the authenticated email + last-used timestamp
+        # Persist email + timestamp; warn if same email found in another profile
         _persist_profile_email(profile)
+        detected_email = get_profile_email(profile)
+        _warn_duplicate_email(profile, detected_email)
 
     sys.exit(0)
+
 
 
 
@@ -946,10 +1035,12 @@ def _print_help():
     print(f"  {C_WHITE}agyp info <profile>{C_RESET}            Show detailed profile info")
     print(f"  {C_WHITE}agyp rename <old> <new>{C_RESET}        Rename a profile")
     print(f"  {C_WHITE}agyp delete <profile>{C_RESET}          Delete a profile")
-    print(f"  {C_WHITE}agyp duplicate <src> <dst>{C_RESET}     Clone a profile (copies saved tokens)")
+    print(f"  {C_WHITE}agyp duplicate <src> <dst>{C_RESET}     Clone a profile (auth tokens stripped)")
+    print(f"  {C_WHITE}agyp reset-auth <profile>{C_RESET}      {C_YELLOW}Clear saved tokens → force fresh login{C_RESET}")
     print(f"  {C_WHITE}agyp --version{C_RESET}                 Show version")
     print(f"  {C_WHITE}agyp --help{C_RESET}                    Show this help")
     print(f"\n{C_GRAY}Profiles stored in: ~/agyp-profiles/{C_RESET}\n")
+
 
 
 def _cmd_list():
@@ -1119,6 +1210,58 @@ def _cmd_duplicate(src_name, dst_name):
 
 
 
+def _cmd_reset_auth(profile_name):
+    """Clear a profile's saved auth tokens — forces fresh login on next launch.
+
+    Use this when a profile ended up with the wrong Google account.
+    After resetting, launch the profile and choose 'Use another account'
+    in the browser to authenticate with a different Google account.
+    """
+    name = sanitize_name(profile_name)
+    if name is None:
+        print(f"{C_RED}Error: Invalid profile name '{profile_name}'.{C_RESET}")
+        sys.exit(1)
+    target = PROFILES_DIR / name
+    if not target.exists():
+        print(f"{C_RED}Error: Profile '{name}' does not exist.{C_RESET}")
+        sys.exit(1)
+
+    old_email = get_profile_email(name) or "none"
+    cleared = 0
+
+    # Remove known token files from the profile dir
+    for rel in _TOKEN_RELPATHS:
+        p = target / rel
+        if p.exists():
+            p.unlink()
+            cleared += 1
+
+    # Also sweep .agy_accounts sub-sandboxes
+    agy_inner = target / ".agy_accounts"
+    if agy_inner.exists():
+        try:
+            for slot in agy_inner.iterdir():
+                if slot.is_dir():
+                    for rel in _TOKEN_RELPATHS:
+                        p = slot / rel
+                        if p.exists():
+                            p.unlink()
+                            cleared += 1
+        except Exception:
+            pass
+
+    # Remove the cached email from metadata so TUI shows no stale account
+    meta = _load_meta(name)
+    meta.pop("email", None)
+    _save_meta(name, **{k: v for k, v in meta.items()})
+
+    print(f"{C_GREEN}✓ Auth reset for profile '{name}'.{C_RESET}")
+    print(f"  {C_GRAY}Removed {cleared} token file(s).  Previous account: {old_email}{C_RESET}")
+    print(f"\n  Next launch will prompt for a fresh Google sign-in.")
+    print(f"  {C_WHITE}In the browser → click 'Use another account'{C_RESET}")
+    print(f"  to authenticate with a different Google account.\n")
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def _goodbye():
@@ -1168,6 +1311,13 @@ def main():
             print(f"{C_RED}Usage: agyp duplicate <src-name> <dst-name>{C_RESET}")
             sys.exit(1)
         _cmd_duplicate(argv[1], argv[2])
+        return
+
+    if argv and argv[0] == "reset-auth":
+        if len(argv) != 2:
+            print(f"{C_RED}Usage: agyp reset-auth <profile-name>{C_RESET}")
+            sys.exit(1)
+        _cmd_reset_auth(argv[1])
         return
 
     # Direct profile launch: agyp <profile> [agy-args...]
