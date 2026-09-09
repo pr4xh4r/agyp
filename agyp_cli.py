@@ -12,11 +12,13 @@ import io
 import re
 import tty
 import json
+import time
 import shutil
 import atexit
 import termios
 import subprocess
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 # ── Platform guard ─────────────────────────────────────────────────────────────
@@ -45,7 +47,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -58,9 +60,11 @@ C_RESET  = "\033[0m"
 C_JOIN   = "\033[38;2;112;230;39m"   # bright lime green (X logo color)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-PROFILES_DIR    = _SYSTEM_HOME / "agyp-profiles"
-CONFIG_FILE     = PROFILES_DIR / "config.json"
+PROFILES_DIR     = _SYSTEM_HOME / "agyp-profiles"
+CONFIG_FILE      = PROFILES_DIR / "config.json"
 LAST_ACTIVE_FILE = PROFILES_DIR / ".last_active"
+# Metadata lives in a hidden sub-dir so it never appears in the profiles list.
+META_DIR         = PROFILES_DIR / ".meta"
 
 # Token files live at the same relative paths inside any HOME dir.
 _TOKEN_RELPATHS = [
@@ -68,6 +72,12 @@ _TOKEN_RELPATHS = [
     Path(".gemini") / "oauth_creds.json",
     Path(".gemini") / "google_accounts.json",
 ]
+
+# Email regex — matches foo@bar.com across various log formats (key=val, JSON, plain)
+_EMAIL_RE = re.compile(
+    r'email[=:\s"\']+([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})',
+    re.IGNORECASE,
+)
 
 
 # ── Flicker-free terminal buffer ───────────────────────────────────────────────
@@ -128,20 +138,400 @@ def sanitize_name(name):
     return name
 
 
-def get_profile_email(profile_name):
-    """Return the last authenticated email for a profile, or None."""
-    cli_log = PROFILES_DIR / profile_name / ".gemini" / "antigravity-cli" / "cli.log"
-    if cli_log.exists():
+def _list_profiles():
+    """Return sorted list of profile names, skipping hidden dirs like .meta."""
+    if not PROFILES_DIR.exists():
+        return []
+    return sorted(
+        d.name for d in PROFILES_DIR.iterdir()
+        if d.is_dir() and not d.name.startswith('.')
+    )
+
+
+# ── Profile metadata ───────────────────────────────────────────────────────────
+# Each profile has a JSON file at .meta/<name>.json storing:
+#   email, created_at, last_used
+# This survives log rotation and does not depend on agy's internal log format.
+
+def _load_meta(profile_name):
+    """Load metadata dict for a profile, returning {} if absent or corrupt."""
+    meta_file = META_DIR / f"{profile_name}.json"
+    if meta_file.exists():
         try:
-            with open(cli_log, "r", encoding="utf-8", errors="ignore") as fh:
-                for line in reversed(fh.readlines()):
-                    m = re.search(r'email=([^,\s]+)', line)
-                    if m:
-                        return m.group(1).strip()
+            return json.loads(meta_file.read_text(encoding="utf-8"))
         except Exception:
             pass
+    return {}
+
+
+def _save_meta(profile_name, **kwargs):
+    """Persist key/value pairs into a profile's metadata file."""
+    meta = _load_meta(profile_name)
+    meta.update({k: v for k, v in kwargs.items() if v is not None})
+    META_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        (META_DIR / f"{profile_name}.json").write_text(
+            json.dumps(meta, indent=2, default=str), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def _rename_meta(old_name, new_name):
+    """Rename a profile's metadata file when the profile itself is renamed."""
+    old_file = META_DIR / f"{old_name}.json"
+    new_file = META_DIR / f"{new_name}.json"
+    if old_file.exists():
+        try:
+            old_file.rename(new_file)
+        except Exception:
+            pass
+
+
+def _delete_meta(profile_name):
+    """Remove a profile's metadata file when the profile is deleted."""
+    meta_file = META_DIR / f"{profile_name}.json"
+    if meta_file.exists():
+        try:
+            meta_file.unlink()
+        except Exception:
+            pass
+
+
+# ── Email detection ────────────────────────────────────────────────────────────
+# BUG FIX: agy writes its runtime logs inside .agy_accounts/<slot>/.gemini/…/cli.log,
+# NOT at the top-level profile_dir/.gemini/…/cli.log.  Both locations are now
+# searched, with the most-recently-modified slot checked first.
+
+def _search_email_in_log(log_path):
+    """Scan a single cli.log for the most-recently-authenticated email."""
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as fh:
+            for line in reversed(fh.readlines()):
+                m = _EMAIL_RE.search(line)
+                if m:
+                    return m.group(1).strip()
+    except Exception:
+        pass
     return None
 
+
+def get_profile_email(profile_name):
+    """Return the authenticated email for a profile, or None.
+
+    Priority:
+      1. Persistent metadata (.meta/<name>.json) — fastest and most reliable.
+      2. Top-level cli.log at profile_dir/.gemini/antigravity-cli/cli.log.
+      3. cli.log inside .agy_accounts/<slot>/ sub-sandboxes (newest slot first)
+         — this is where agy actually writes logs during an isolated session.
+    """
+    # 1. Metadata (persisted after every session)
+    meta = _load_meta(profile_name)
+    if meta.get("email"):
+        return meta["email"]
+
+    profile_dir = PROFILES_DIR / profile_name
+
+    # 2. Top-level log (unified mode / some agy versions write here directly)
+    email = _search_email_in_log(
+        profile_dir / ".gemini" / "antigravity-cli" / "cli.log"
+    )
+    if email:
+        return email
+
+    # 3. Inside .agy_accounts/<slot>/ — search newest slot first
+    agy_inner = profile_dir / ".agy_accounts"
+    if agy_inner.exists():
+        try:
+            slots = sorted(
+                (s for s in agy_inner.iterdir() if s.is_dir()),
+                key=lambda s: s.stat().st_mtime,
+                reverse=True,
+            )
+            for slot in slots:
+                email = _search_email_in_log(
+                    slot / ".gemini" / "antigravity-cli" / "cli.log"
+                )
+                if email:
+                    return email
+        except Exception:
+            pass
+
+    return None
+
+
+def _persist_profile_email(profile_name):
+    """Extract the email from logs after a session and store it in metadata."""
+    email = get_profile_email(profile_name)
+    updates = {"last_used": datetime.now().isoformat()}
+    if email:
+        updates["email"] = email
+    _save_meta(profile_name, **updates)
+
+
+# ── Token pre-seeding ──────────────────────────────────────────────────────────
+# BUG FIX: In isolated mode (HOME=profile_dir) agy creates .agy_accounts/<slot>/
+# and re-reads auth tokens from INSIDE that slot.  Fresh slots have no tokens,
+# so agy demands re-authentication on every profile switch.  Pre-seeding copies
+# the profile's saved canonical tokens into each existing slot before launch.
+
+def _preseed_agy_slots(profile_dir):
+    """Copy saved tokens into existing .agy_accounts/ slots before launching."""
+    agy_inner = profile_dir / ".agy_accounts"
+    if not agy_inner.exists():
+        return
+    try:
+        for slot in agy_inner.iterdir():
+            if not slot.is_dir():
+                continue
+            for rel in _TOKEN_RELPATHS:
+                src = profile_dir / rel
+                if src.exists():
+                    dst = slot / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+    except Exception:
+        pass
+
+
+# ── Auth file management ───────────────────────────────────────────────────────
+
+def _migrate_old_tokens(profile_dir):
+    """Move tokens from old flat layout to the .gemini mirror structure."""
+    old_names = {
+        "antigravity-oauth-token": _TOKEN_RELPATHS[0],
+        "oauth_creds.json":        _TOKEN_RELPATHS[1],
+        "google_accounts.json":    _TOKEN_RELPATHS[2],
+    }
+    for fname, rel in old_names.items():
+        old = profile_dir / fname
+        new = profile_dir / rel
+        if old.exists() and not new.exists():
+            new.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old), str(new))
+
+
+# ── Isolated-mode token persistence ───────────────────────────────────────────
+# agy uses the $HOME env var for its AppDataDir (confirmed: when HOME=<profile_dir>,
+# AppDataDir = <profile_dir>/.gemini/antigravity-cli/).  This means tokens written
+# during a session land at:
+#   <profile_dir>/.gemini/antigravity-cli/antigravity-oauth-token
+# which is exactly where agyp expects to find them.
+#
+# HOWEVER, agy also creates .agy_accounts/<slot>/ sub-sandboxes and may write
+# refreshed tokens there.  We run a broad post-session sweep to always find the
+# newest token and persist it at the canonical location for the next launch.
+
+def _collect_token_candidates(profile_dir):
+    """Return all paths where agy may have written a token during the session."""
+    candidates = []
+    # Primary: directly inside the profile HOME
+    for rel in _TOKEN_RELPATHS:
+        candidates.append(profile_dir / rel)
+    # Secondary: inside any .agy_accounts sub-sandbox
+    agy_inner = profile_dir / ".agy_accounts"
+    if agy_inner.exists():
+        try:
+            for slot in agy_inner.iterdir():
+                if slot.is_dir():
+                    for rel in _TOKEN_RELPATHS:
+                        candidates.append(slot / rel)
+        except Exception:
+            pass
+    return candidates
+
+
+def _harvest_newest_token(profile_dir, session_start_ts):
+    """After a session, find the newest written token and save to canonical paths.
+
+    Scans all candidate locations (profile_dir and any .agy_accounts sub-dirs
+    created inside it).  Only copies files modified AFTER session start so we
+    never overwrite a good saved token with a stale one.
+    """
+    for rel in _TOKEN_RELPATHS:
+        canonical  = profile_dir / rel
+        best_src   = None
+        best_mtime = session_start_ts  # only accept files newer than session start
+
+        for candidate in _collect_token_candidates(profile_dir):
+            if candidate.name != canonical.name:
+                continue
+            try:
+                mtime = candidate.stat().st_mtime
+                if mtime > best_mtime:
+                    best_mtime = mtime
+                    best_src   = candidate
+            except OSError:
+                pass
+
+        if best_src and best_src != canonical:
+            canonical.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(best_src, canonical)
+
+
+def swap_in_profile(profile_dir):
+    """Unified mode: copy profile tokens into live HOME."""
+    for rel in _TOKEN_RELPATHS:
+        src = profile_dir / rel
+        dst = REAL_HOME / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.exists():
+            if dst.exists():
+                shutil.copy2(dst, dst.with_suffix(".agyp-backup"))
+            shutil.copy2(src, dst)
+        else:
+            if dst.exists():
+                shutil.copy2(dst, dst.with_suffix(".agyp-backup"))
+                dst.unlink()
+
+
+def save_back_profile(profile_dir):
+    """Unified mode: save updated tokens back into profile after session ends."""
+    for rel in _TOKEN_RELPATHS:
+        src = REAL_HOME / rel
+        dst = profile_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.exists():
+            shutil.copy2(src, dst)
+
+
+def set_last_active(profile_name):
+    try:
+        PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+        LAST_ACTIVE_FILE.write_text(profile_name, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_last_active():
+    try:
+        if LAST_ACTIVE_FILE.exists():
+            LAST_ACTIVE_FILE.unlink()
+    except OSError:
+        pass
+
+
+def inside_agy_session():
+    """True if we're running inside an existing agy sandbox."""
+    return ".agy_accounts" in os.environ.get("HOME", "")
+
+
+# ── agy binary resolution ──────────────────────────────────────────────────────
+
+def _resolve_agy():
+    """Return path to the agy binary, respecting custom config."""
+    custom = None
+    try:
+        if CONFIG_FILE.exists():
+            custom = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("custom_cli_path")
+    except Exception:
+        pass
+    if custom and os.path.isfile(custom):
+        return custom
+    return shutil.which("agy")
+
+
+# ── Launch helpers ─────────────────────────────────────────────────────────────
+
+def _bash_exec(env, cmd_str):
+    """Replace this process with bash running cmd_str (os.execvpe — never returns)."""
+    bash = shutil.which("bash") or "/bin/bash"
+    os.execvpe(bash, [bash, "-i", "-c", cmd_str], env)
+
+
+def _bash_run(env, cmd_str):
+    """Run cmd_str in a bash subprocess and wait for it to finish."""
+    bash = shutil.which("bash") or "/bin/bash"
+    return subprocess.call([bash, "-i", "-c", cmd_str], env=env)
+
+
+def launch_isolated(profile, args):
+    """Launch agy with a fully isolated HOME = profile directory.
+
+    Fixes applied vs v1.3:
+      • _preseed_agy_slots() — copies saved tokens into existing .agy_accounts/
+        sub-sandboxes BEFORE launch, so agy finds credentials inside its own
+        sandbox and does not re-prompt for login on every switch.
+      • _persist_profile_email() — after the session, extracts the authenticated
+        email from logs (including .agy_accounts/* subdirs) and saves it to the
+        profile's metadata file for reliable display in the TUI.
+    """
+    agy_bin = _resolve_agy()
+    if not agy_bin:
+        print(f"{C_RED}Error: 'agy' not found in PATH. Is Antigravity installed?{C_RESET}")
+        sys.exit(1)
+
+    profile_dir = PROFILES_DIR / profile
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    _migrate_old_tokens(profile_dir)
+
+    # Initialise metadata on first use of this profile
+    if not _load_meta(profile).get("created_at"):
+        _save_meta(profile, created_at=datetime.now().isoformat())
+
+    print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}isolated{C_BLUE}]{C_RESET}")
+    print(f"{C_GREEN}Launching isolated environment...{C_RESET}\n")
+
+    session_start_ts = time.time()
+
+    env = os.environ.copy()
+    env["HOME"] = str(profile_dir)
+    for xdg in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]:
+        env.pop(xdg, None)
+
+    # FIX: pre-seed existing .agy_accounts slots so agy finds credentials inside
+    # its own sandbox without demanding re-authentication every launch.
+    _preseed_agy_slots(profile_dir)
+
+    extra = " ".join(f"'{a}'" for a in args) if args else ""
+    try:
+        # subprocess.call (not os.execvpe) — this process survives to save tokens.
+        _bash_run(env, f"'{agy_bin}' {extra}".strip())
+    finally:
+        # Sweep all candidate token locations and persist the newest one.
+        _harvest_newest_token(profile_dir, session_start_ts)
+        # Persist the authenticated email + last-used timestamp into metadata.
+        _persist_profile_email(profile)
+
+    sys.exit(0)
+
+
+def launch_unified(profile, args):
+    """Launch agy with shared HOME but this profile's auth tokens."""
+    agy_bin = _resolve_agy()
+    if not agy_bin:
+        print(f"{C_RED}Error: 'agy' not found in PATH. Is Antigravity installed?{C_RESET}")
+        sys.exit(1)
+
+    profile_dir = PROFILES_DIR / profile
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    _migrate_old_tokens(profile_dir)
+
+    # Initialise metadata on first use of this profile
+    if not _load_meta(profile).get("created_at"):
+        _save_meta(profile, created_at=datetime.now().isoformat())
+
+    if inside_agy_session():
+        print(f"\n{C_YELLOW}Warning: already inside an agy session. A conflict may occur.{C_RESET}")
+        print(f"{C_GRAY}Consider using isolated mode instead.{C_RESET}\n")
+
+    print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}unified{C_BLUE}]{C_RESET}")
+    swap_in_profile(profile_dir)
+    set_last_active(profile)
+    print(f"{C_GREEN}Auth tokens swapped. Launching...{C_RESET}\n")
+
+    extra = " ".join(f"'{a}'" for a in args) if args else ""
+    try:
+        _bash_run(os.environ.copy(), f"'{agy_bin}' {extra}".strip())
+    finally:
+        save_back_profile(profile_dir)
+        clear_last_active()
+        _persist_profile_email(profile)
+
+    sys.exit(0)
+
+
+# ── Terminal I/O ───────────────────────────────────────────────────────────────
 
 def get_key():
     """Read one keypress from raw stdin — handles arrow keys, Enter, Ctrl-C."""
@@ -250,7 +640,7 @@ def ask_mode():
     """Ask isolated vs unified. Returns 'isolated', 'unified', or 'EXIT'."""
     options = [
         ("isolated", "Isolated", "[Each profile is fully separated]"),
-        ("unified",  "Unified",  "[Shared history]"),
+        ("unified",  "Unified",  "[Shared history, token-only swap]"),
         ("join_us",  "",         ""),
         ("exit",     "",         ""),
     ]
@@ -299,7 +689,6 @@ def interactive_menu(profiles, launch_mode="isolated"):
     """Full TUI for profile selection, creation, rename, delete."""
     mode = "main"
     current_idx = 0
-    # Pre-build options so they're always defined before get_key() is called
     options = []
 
     def build_options():
@@ -325,7 +714,11 @@ def interactive_menu(profiles, launch_mode="isolated"):
         with TerminalBuffer():
             draw_header()
             if mode == "main":
-                mode_label = f"\033[38;2;112;230;39mIsolated\033[0m" if launch_mode == "isolated" else f"{C_YELLOW}Unified{C_RESET}"
+                mode_label = (
+                    f"\033[38;2;112;230;39mIsolated\033[0m"
+                    if launch_mode == "isolated"
+                    else f"{C_YELLOW}Unified{C_RESET}"
+                )
                 print(f" {C_WHITE}Select a profile to launch:{C_RESET}  {C_GRAY}mode:{C_RESET} {mode_label}\n")
             elif mode == "delete":
                 print(f" {C_RED}Select a profile to delete:{C_RESET}\n")
@@ -340,11 +733,16 @@ def interactive_menu(profiles, launch_mode="isolated"):
 
             for i, opt in enumerate(options):
                 suffix = ""
-                plain = re.sub(r'\033\[[^m]*m', '', opt)   # strip ANSI for email lookup
                 if mode == "main" and i < len(profiles):
                     email = get_profile_email(opt)
                     if email:
                         suffix = f"  {C_GRAY}[{email}]{C_RESET}"
+                    else:
+                        # Fall back to last-used date so the row isn't blank
+                        meta = _load_meta(opt)
+                        lu = meta.get("last_used")
+                        if lu:
+                            suffix = f"  {C_GRAY}[last: {lu[:10]}]{C_RESET}"
                 if i == current_idx:
                     print(f"  {C_BLUE}\u276f {opt}{suffix}{C_RESET}")
                 else:
@@ -384,7 +782,6 @@ def interactive_menu(profiles, launch_mode="isolated"):
 
             elif mode == "create":
                 if current_idx == 0:
-                    # Exit alt-screen for input, then restore
                     sys.stdout.write("\033[?1049l\033[?25h")
                     sys.stdout.flush()
                     try:
@@ -397,11 +794,10 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     sys.stdout.flush()
                     choice = sanitize_name(raw)
                     if not choice:
-                        # flash error — will be overwritten on next render
-                        import time; time.sleep(1.2)
+                        time.sleep(1.2)
                         continue
                     if (PROFILES_DIR / choice).exists():
-                        import time; time.sleep(1.2)
+                        time.sleep(1.2)
                         continue
                     return choice
                 else:
@@ -424,6 +820,7 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     new_name = sanitize_name(raw)
                     if new_name and not (PROFILES_DIR / new_name).exists():
                         (PROFILES_DIR / p_old).rename(PROFILES_DIR / new_name)
+                        _rename_meta(p_old, new_name)          # FIX: keep metadata in sync
                         profiles[profiles.index(p_old)] = new_name
                         profiles.sort()
                     mode = "main"
@@ -440,7 +837,9 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     try:
                         clear_screen()
                         draw_header()
-                        ans = input(f" {C_RED}Permanently delete '{p_del}'? (y/N):{C_RESET} ").strip().lower()
+                        ans = input(
+                            f" {C_RED}Permanently delete '{p_del}'? (y/N):{C_RESET} "
+                        ).strip().lower()
                     except (EOFError, KeyboardInterrupt):
                         ans = ""
                     sys.stdout.write("\033[?1049h\033[?25l")
@@ -449,6 +848,7 @@ def interactive_menu(profiles, launch_mode="isolated"):
                         target = PROFILES_DIR / p_del
                         if target.exists():
                             shutil.rmtree(target)
+                        _delete_meta(p_del)                    # FIX: also remove metadata
                         profiles.remove(p_del)
                         current_idx = min(current_idx, max(0, len(profiles) - 1))
                     mode = "main"
@@ -460,257 +860,89 @@ def interactive_menu(profiles, launch_mode="isolated"):
     return None
 
 
-# ── Auth file management ───────────────────────────────────────────────────────
-
-def _migrate_old_tokens(profile_dir):
-    """Move tokens from old flat layout to the .gemini mirror structure."""
-    old_names = {
-        "antigravity-oauth-token": _TOKEN_RELPATHS[0],
-        "oauth_creds.json":        _TOKEN_RELPATHS[1],
-        "google_accounts.json":    _TOKEN_RELPATHS[2],
-    }
-    for fname, rel in old_names.items():
-        old = profile_dir / fname
-        new = profile_dir / rel
-        if old.exists() and not new.exists():
-            new.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(old), str(new))
-
-
-# ── Isolated-mode token persistence ───────────────────────────────────────────
-# agy uses the $HOME env var for its AppDataDir (confirmed: when HOME=<profile_dir>,
-# AppDataDir = <profile_dir>/.gemini/antigravity-cli/).  This means tokens written
-# during a session land at:
-#   <profile_dir>/.gemini/antigravity-cli/antigravity-oauth-token
-# which is exactly where agyp expects to find them.
-#
-# HOWEVER, when agyp itself is running inside an existing agy session (which changes
-# HOME to .agy_accounts/N), there's a risk that any token refresh also lands
-# inside that outer sandbox rather than the profile.  We run a broad post-session
-# sweep to always find the newest token and persist it into the profile's canonical
-# location so the next launch starts logged in.
-
-def _collect_token_candidates(profile_dir):
-    """Return all paths where agy may have written a token during the session."""
-    candidates = []
-    # Primary: direct inside profile HOME (normal isolated mode)
-    for rel in _TOKEN_RELPATHS:
-        candidates.append(profile_dir / rel)
-    # Secondary: inside any .agy_accounts sub-sandbox created within profile_dir
-    agy_inner = profile_dir / ".agy_accounts"
-    if agy_inner.exists():
-        for slot in agy_inner.iterdir():
-            if slot.is_dir():
-                for rel in _TOKEN_RELPATHS:
-                    candidates.append(slot / rel)
-    return candidates
-
-
-def _harvest_newest_token(profile_dir, session_start_ts):
-    """After a session, find the newest written token and save to canonical paths.
-
-    Scans all candidate locations (profile_dir and any .agy_accounts sub-dirs
-    created inside it).  Only copies files modified AFTER session start so we
-    never overwrite a good saved token with a stale one.
-    """
-    for rel in _TOKEN_RELPATHS:
-        canonical = profile_dir / rel
-        best_src  = None
-        best_mtime = session_start_ts  # only accept files newer than session start
-
-        for candidate in _collect_token_candidates(profile_dir):
-            if candidate.name != canonical.name:
-                continue
-            try:
-                mtime = candidate.stat().st_mtime
-                if mtime > best_mtime:
-                    best_mtime = mtime
-                    best_src   = candidate
-            except OSError:
-                pass
-
-        if best_src and best_src != canonical:
-            canonical.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(best_src, canonical)
-
-
-def swap_in_profile(profile_dir):
-    """Unified mode: copy profile tokens into live HOME."""
-    for rel in _TOKEN_RELPATHS:
-        src = profile_dir / rel
-        dst = REAL_HOME / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if src.exists():
-            if dst.exists():
-                shutil.copy2(dst, dst.with_suffix(".agyp-backup"))
-            shutil.copy2(src, dst)
-        else:
-            if dst.exists():
-                shutil.copy2(dst, dst.with_suffix(".agyp-backup"))
-                dst.unlink()
-
-
-def save_back_profile(profile_dir):
-    """Unified mode: save updated tokens back into profile after session ends."""
-    for rel in _TOKEN_RELPATHS:
-        src = REAL_HOME / rel
-        dst = profile_dir / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if src.exists():
-            shutil.copy2(src, dst)
-
-
-def set_last_active(profile_name):
-    try:
-        PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-        LAST_ACTIVE_FILE.write_text(profile_name, encoding="utf-8")
-    except OSError:
-        pass
-
-
-def clear_last_active():
-    try:
-        if LAST_ACTIVE_FILE.exists():
-            LAST_ACTIVE_FILE.unlink()
-    except OSError:
-        pass
-
-
-def inside_agy_session():
-    """True if we're running inside an existing agy sandbox."""
-    return ".agy_accounts" in os.environ.get("HOME", "")
-
-
-# ── agy binary resolution ──────────────────────────────────────────────────────
-
-def _resolve_agy():
-    """Return path to the agy binary, respecting custom config."""
-    custom = None
-    try:
-        if CONFIG_FILE.exists():
-            custom = json.loads(CONFIG_FILE.read_text(encoding="utf-8")).get("custom_cli_path")
-    except Exception:
-        pass
-    if custom and os.path.isfile(custom):
-        return custom
-    return shutil.which("agy")
-
-
-# ── Launch helpers ─────────────────────────────────────────────────────────────
-
-def _bash_exec(env, cmd_str):
-    """Replace this process with bash running cmd_str (os.execvpe — never returns)."""
-    bash = shutil.which("bash") or "/bin/bash"
-    os.execvpe(bash, [bash, "-i", "-c", cmd_str], env)
-
-
-def _bash_run(env, cmd_str):
-    """Run cmd_str in a bash subprocess and wait for it to finish."""
-    bash = shutil.which("bash") or "/bin/bash"
-    return subprocess.call([bash, "-i", "-c", cmd_str], env=env)
-
-
-def launch_isolated(profile, args):
-    """Launch agy with a fully isolated HOME = profile directory.
-
-    Token persistence: agy uses $HOME (env var) as its AppDataDir base, so tokens
-    are read from and written to <profile_dir>/.gemini/antigravity-cli/.  We run
-    agy as a subprocess (not os.execvpe) so this process survives to sweep and
-    persist the refreshed token back into the profile after every session.
-    """
-    import time
-
-    agy_bin = _resolve_agy()
-    if not agy_bin:
-        print(f"{C_RED}Error: 'agy' not found in PATH. Is Antigravity installed?{C_RESET}")
-        sys.exit(1)
-
-    profile_dir = PROFILES_DIR / profile
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    _migrate_old_tokens(profile_dir)
-
-    print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}isolated{C_BLUE}]{C_RESET}")
-    print(f"{C_GREEN}Launching isolated environment...{C_RESET}\n")
-
-    session_start_ts = time.time()
-
-    env = os.environ.copy()
-    env["HOME"] = str(profile_dir)
-    for xdg in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]:
-        env.pop(xdg, None)
-
-    extra = " ".join(f"'{a}'" for a in args) if args else ""
-    try:
-        # subprocess.call (not os.execvpe) — this process survives to save tokens.
-        _bash_run(env, f"'{agy_bin}' {extra}".strip())
-    finally:
-        # Sweep all candidate token locations and persist the newest one into
-        # the profile's canonical path.  Runs even on crash or Ctrl-C.
-        _harvest_newest_token(profile_dir, session_start_ts)
-
-    sys.exit(0)
-
-
-def launch_unified(profile, args):
-    """Launch agy with shared HOME but this profile's auth tokens."""
-    agy_bin = _resolve_agy()
-    if not agy_bin:
-        print(f"{C_RED}Error: 'agy' not found in PATH. Is Antigravity installed?{C_RESET}")
-        sys.exit(1)
-
-    profile_dir = PROFILES_DIR / profile
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    _migrate_old_tokens(profile_dir)
-
-    if inside_agy_session():
-        print(f"\n{C_YELLOW}Warning: already inside an agy session. A conflict may occur.{C_RESET}")
-        print(f"{C_GRAY}Consider using isolated mode instead.{C_RESET}\n")
-
-    print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}unified{C_BLUE}]{C_RESET}")
-    swap_in_profile(profile_dir)
-    set_last_active(profile)
-    print(f"{C_GREEN}Auth tokens swapped. Launching...{C_RESET}\n")
-
-    extra = " ".join(f"'{a}'" for a in args) if args else ""
-    try:
-        _bash_run(os.environ.copy(), f"'{agy_bin}' {extra}".strip())
-    finally:
-        save_back_profile(profile_dir)
-        clear_last_active()
-
-    sys.exit(0)
-
-
 # ── Non-interactive subcommands ────────────────────────────────────────────────
 
 def _print_help():
     draw_header()
     print(f"{C_WHITE}Usage:{C_RESET}\n")
-    print(f"  {C_WHITE}agyp{C_RESET}                       Launch interactive profile manager")
-    print(f"  {C_WHITE}agyp <profile>{C_RESET}             Launch a named profile directly (isolated mode)")
-    print(f"  {C_WHITE}agyp <profile> [args...]{C_RESET}   Pass extra args to agy")
-    print(f"  {C_WHITE}agyp list{C_RESET}                  List all saved profiles")
-    print(f"  {C_WHITE}agyp rename <old> <new>{C_RESET}    Rename a profile")
-    print(f"  {C_WHITE}agyp --version{C_RESET}             Show version")
-    print(f"  {C_WHITE}agyp --help{C_RESET}                Show this help")
+    print(f"  {C_WHITE}agyp{C_RESET}                           Launch interactive profile manager")
+    print(f"  {C_WHITE}agyp <profile>{C_RESET}                 Launch a named profile (isolated mode)")
+    print(f"  {C_WHITE}agyp <profile> [args...]{C_RESET}       Pass extra args to agy")
+    print(f"  {C_WHITE}agyp list{C_RESET}                      List all saved profiles")
+    print(f"  {C_WHITE}agyp info <profile>{C_RESET}            Show detailed profile info")
+    print(f"  {C_WHITE}agyp rename <old> <new>{C_RESET}        Rename a profile")
+    print(f"  {C_WHITE}agyp delete <profile>{C_RESET}          Delete a profile")
+    print(f"  {C_WHITE}agyp duplicate <src> <dst>{C_RESET}     Clone a profile (copies saved tokens)")
+    print(f"  {C_WHITE}agyp --version{C_RESET}                 Show version")
+    print(f"  {C_WHITE}agyp --help{C_RESET}                    Show this help")
     print(f"\n{C_GRAY}Profiles stored in: ~/agyp-profiles/{C_RESET}\n")
 
 
 def _cmd_list():
-    print()   # push past the shell prompt line
-    if not PROFILES_DIR.exists():
-        print(f"  {C_GRAY}No profiles yet. Run 'agyp' to create one.{C_RESET}\n")
-        return
-    profiles = sorted([d.name for d in PROFILES_DIR.iterdir() if d.is_dir()])
+    print()
+    profiles = _list_profiles()
     if not profiles:
         print(f"  {C_GRAY}No profiles yet. Run 'agyp' to create one.{C_RESET}\n")
         return
     print(f"  {C_WHITE}Saved profiles:{C_RESET}\n")
     for p in profiles:
-        email = get_profile_email(p)
-        suffix = f"  {C_GRAY}[{email}]{C_RESET}" if email else ""
-        print(f"  {C_BLUE}·{C_RESET} {p}{suffix}")
+        email     = get_profile_email(p)
+        meta      = _load_meta(p)
+        last_used = meta.get("last_used", "")
+        created   = meta.get("created_at", "")
+
+        email_part = f"  {C_GRAY}[{email}]{C_RESET}" if email else ""
+        date_part  = (
+            f"  {C_GRAY}last: {last_used[:10]}{C_RESET}" if last_used else
+            (f"  {C_GRAY}created: {created[:10]}{C_RESET}" if created else "")
+        )
+        print(f"  {C_BLUE}·{C_RESET} {p}{email_part}{date_part}")
     print()
+
+
+def _cmd_info(profile_name):
+    """Print detailed information about a single profile."""
+    name = sanitize_name(profile_name)
+    if name is None:
+        print(f"{C_RED}Error: Invalid profile name '{profile_name}'.{C_RESET}")
+        sys.exit(1)
+    target = PROFILES_DIR / name
+    if not target.exists():
+        print(f"{C_RED}Error: Profile '{name}' does not exist.{C_RESET}")
+        sys.exit(1)
+
+    meta      = _load_meta(name)
+    email     = get_profile_email(name) or "—"
+    created   = meta.get("created_at",  "—")
+    last_used = meta.get("last_used",   "—")
+
+    # Disk usage
+    try:
+        total = sum(f.stat().st_size for f in target.rglob("*") if f.is_file())
+        size_str = (
+            f"{total / 1024 / 1024:.1f} MB"
+            if total >= 1024 * 1024
+            else f"{total / 1024:.1f} KB"
+        )
+    except Exception:
+        size_str = "—"
+
+    # Auth token status
+    has_token = any((target / rel).exists() for rel in _TOKEN_RELPATHS)
+    token_str = (
+        f"{C_GREEN}saved{C_RESET}"
+        if has_token
+        else f"{C_YELLOW}not saved — login required on next launch{C_RESET}"
+    )
+
+    W = 14
+    print(f"\n  {C_WHITE}Profile: {name}{C_RESET}")
+    print(f"  {'Email:':<{W}} {email}")
+    print(f"  {'Auth token:':<{W}} {token_str}")
+    print(f"  {'Created:':<{W}} {created[:19] if created != '—' else created}")
+    print(f"  {'Last used:':<{W}} {last_used[:19] if last_used != '—' else last_used}")
+    print(f"  {'Disk usage:':<{W}} {size_str}")
+    print(f"  {'Path:':<{W}} {target}\n")
 
 
 def _cmd_rename(old_name, new_name):
@@ -727,7 +959,65 @@ def _cmd_rename(old_name, new_name):
     if dst.exists():
         print(f"{C_RED}Error: Profile '{new}' already exists.{C_RESET}"); sys.exit(1)
     src.rename(dst)
+    _rename_meta(old, new)
     print(f"{C_GREEN}✓ Renamed '{old}' → '{new}'{C_RESET}")
+
+
+def _cmd_delete(profile_name):
+    """Delete a profile after an interactive confirmation prompt."""
+    name = sanitize_name(profile_name)
+    if name is None:
+        print(f"{C_RED}Error: Invalid profile name '{profile_name}'.{C_RESET}")
+        sys.exit(1)
+    target = PROFILES_DIR / name
+    if not target.exists():
+        print(f"{C_RED}Error: Profile '{name}' does not exist.{C_RESET}")
+        sys.exit(1)
+    try:
+        ans = input(
+            f"{C_RED}Permanently delete profile '{name}'?{C_RESET} (y/N): "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n{C_GRAY}Cancelled.{C_RESET}")
+        return
+    if ans == 'y':
+        shutil.rmtree(target)
+        _delete_meta(name)
+        print(f"{C_GREEN}✓ Deleted profile '{name}'.{C_RESET}")
+    else:
+        print(f"{C_GRAY}Cancelled.{C_RESET}")
+
+
+def _cmd_duplicate(src_name, dst_name):
+    """Clone a profile — copies the full directory including saved auth tokens."""
+    src = sanitize_name(src_name)
+    dst = sanitize_name(dst_name)
+    if src is None:
+        print(f"{C_RED}Error: Invalid name '{src_name}'.{C_RESET}"); sys.exit(1)
+    if dst is None:
+        print(f"{C_RED}Error: Invalid name '{dst_name}'.{C_RESET}"); sys.exit(1)
+    src_dir = PROFILES_DIR / src
+    dst_dir = PROFILES_DIR / dst
+    if not src_dir.exists():
+        print(f"{C_RED}Error: Profile '{src}' does not exist.{C_RESET}"); sys.exit(1)
+    if dst_dir.exists():
+        print(f"{C_RED}Error: Profile '{dst}' already exists.{C_RESET}"); sys.exit(1)
+
+    print(f"Duplicating '{src}' → '{dst}'...")
+    try:
+        shutil.copytree(src_dir, dst_dir)
+    except Exception as e:
+        print(f"{C_RED}Error: {e}{C_RESET}"); sys.exit(1)
+
+    # Fresh metadata for the clone — inherit email, but reset timestamps
+    src_meta = _load_meta(src)
+    _save_meta(dst, email=src_meta.get("email"), created_at=datetime.now().isoformat())
+    print(f"{C_GREEN}✓ Duplicated '{src}' → '{dst}'.{C_RESET}")
+    if src_meta.get("email"):
+        print(
+            f"{C_GRAY}  Tip: the clone shares the same auth token as '{src}'.\n"
+            f"  Launch it and sign in to a different account to separate them.{C_RESET}"
+        )
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
@@ -753,11 +1043,32 @@ def main():
         _cmd_list()
         return
 
+    if argv and argv[0] == "info":
+        if len(argv) != 2:
+            print(f"{C_RED}Usage: agyp info <profile-name>{C_RESET}")
+            sys.exit(1)
+        _cmd_info(argv[1])
+        return
+
     if argv and argv[0] == "rename":
         if len(argv) != 3:
             print(f"{C_RED}Usage: agyp rename <old-name> <new-name>{C_RESET}")
             sys.exit(1)
         _cmd_rename(argv[1], argv[2])
+        return
+
+    if argv and argv[0] == "delete":
+        if len(argv) != 2:
+            print(f"{C_RED}Usage: agyp delete <profile-name>{C_RESET}")
+            sys.exit(1)
+        _cmd_delete(argv[1])
+        return
+
+    if argv and argv[0] == "duplicate":
+        if len(argv) != 3:
+            print(f"{C_RED}Usage: agyp duplicate <src-name> <dst-name>{C_RESET}")
+            sys.exit(1)
+        _cmd_duplicate(argv[1], argv[2])
         return
 
     # Direct profile launch: agyp <profile> [agy-args...]
@@ -780,9 +1091,7 @@ def main():
             exiting = True
             return
 
-        profiles = []
-        if PROFILES_DIR.exists():
-            profiles = sorted([d.name for d in PROFILES_DIR.iterdir() if d.is_dir()])
+        profiles = _list_profiles()
 
         selected_profile = interactive_menu(profiles, launch_mode=mode)
         if selected_profile == "EXIT" or not selected_profile:
@@ -797,7 +1106,7 @@ def main():
             _goodbye()
             os._exit(0)
 
-    # Step 3: launch
+    # Launch the selected profile
     if mode == "isolated":
         launch_isolated(selected_profile, [])
     else:
