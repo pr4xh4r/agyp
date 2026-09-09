@@ -47,7 +47,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -260,9 +260,58 @@ def get_profile_email(profile_name):
     return None
 
 
+def _scan_logs_for_email(profile_name):
+    """Scan all log locations directly — bypasses the metadata cache.
+
+    Used after a session to detect the CURRENT authenticated email, which
+    may differ from a previously cached value (e.g. after switching accounts).
+    Also checks the real HOME's cli.log because isolated mode now pre-swaps
+    tokens into ~/.gemini/ before launch.
+    """
+    profile_dir = PROFILES_DIR / profile_name
+
+    # Check real home first — agy writes here when it ignores the $HOME env var
+    email = _search_email_in_log(
+        REAL_HOME / ".gemini" / "antigravity-cli" / "cli.log"
+    )
+    if email:
+        return email
+
+    # Check profile-dir top-level log (agy versions that respect $HOME)
+    email = _search_email_in_log(
+        profile_dir / ".gemini" / "antigravity-cli" / "cli.log"
+    )
+    if email:
+        return email
+
+    # Check .agy_accounts/<slot>/ sub-sandboxes (newest slot first)
+    agy_inner = profile_dir / ".agy_accounts"
+    if agy_inner.exists():
+        try:
+            slots = sorted(
+                (s for s in agy_inner.iterdir() if s.is_dir()),
+                key=lambda s: s.stat().st_mtime,
+                reverse=True,
+            )
+            for slot in slots:
+                email = _search_email_in_log(
+                    slot / ".gemini" / "antigravity-cli" / "cli.log"
+                )
+                if email:
+                    return email
+        except Exception:
+            pass
+
+    return None
+
+
 def _persist_profile_email(profile_name):
-    """Extract the email from logs after a session and store it in metadata."""
-    email = get_profile_email(profile_name)
+    """After a session, scan logs fresh (never use cached metadata) and persist.
+
+    Scanning fresh ensures we always capture the CURRENT account — important
+    when the user switches to a different Google account in a new session.
+    """
+    email = _scan_logs_for_email(profile_name)
     updates = {"last_used": datetime.now().isoformat()}
     if email:
         updates["email"] = email
@@ -446,15 +495,30 @@ def _bash_run(env, cmd_str):
 
 
 def launch_isolated(profile, args):
-    """Launch agy with a fully isolated HOME = profile directory.
+    """Launch agy with isolated HOME + token swap into the real ~/.gemini/.
 
-    Fixes applied vs v1.3:
-      • _preseed_agy_slots() — copies saved tokens into existing .agy_accounts/
-        sub-sandboxes BEFORE launch, so agy finds credentials inside its own
-        sandbox and does not re-prompt for login on every switch.
-      • _persist_profile_email() — after the session, extracts the authenticated
-        email from logs (including .agy_accounts/* subdirs) and saves it to the
-        profile's metadata file for reliable display in the TUI.
+    ROOT-CAUSE FIX (v1.4.1):
+      agy may resolve its config dir via Path.home() / pwd.getpwuid() rather
+      than the $HOME env var.  When it does, it always reads from the REAL
+      system home — meaning the HOME override alone does not isolate tokens.
+      Both profiles end up using the same ~/.gemini/antigravity-cli/ token,
+      so the same Google account appears in every profile.
+
+    Two-layer isolation strategy:
+      1. Token swap (NEW): the profile's saved tokens are copied into the real
+         ~/.gemini/ BEFORE launch, exactly as unified mode does.  This ensures
+         agy starts authenticated as the correct account regardless of which
+         path it uses to locate its config.
+      2. HOME override (kept): HOME=profile_dir gives each profile its own
+         workspace, history, and any files agy writes relative to $HOME.
+      3. _preseed_agy_slots(): also copies tokens into existing .agy_accounts/
+         sub-sandbox slots for agy versions that create inner sessions.
+
+    After the session:
+      • save_back_profile() — saves tokens from ~/.gemini/ (real home) back
+        into the profile, capturing what agy updated via Path.home().
+      • _harvest_newest_token() — also captures tokens written relative to
+        the $HOME override (profile_dir) for good measure.
     """
     agy_bin = _resolve_agy()
     if not agy_bin:
@@ -474,13 +538,19 @@ def launch_isolated(profile, args):
 
     session_start_ts = time.time()
 
+    # ── Layer 1: Swap profile tokens into the REAL home ────────────────────────
+    # This guarantees agy picks up the right credentials even if it uses
+    # Path.home() internally and ignores our $HOME override.
+    swap_in_profile(profile_dir)
+    set_last_active(profile)
+
+    # ── Layer 2: Override $HOME for workspace isolation ────────────────────────
     env = os.environ.copy()
     env["HOME"] = str(profile_dir)
     for xdg in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]:
         env.pop(xdg, None)
 
-    # FIX: pre-seed existing .agy_accounts slots so agy finds credentials inside
-    # its own sandbox without demanding re-authentication every launch.
+    # ── Layer 3: Pre-seed any existing .agy_accounts/ slots ───────────────────
     _preseed_agy_slots(profile_dir)
 
     extra = " ".join(f"'{a}'" for a in args) if args else ""
@@ -488,12 +558,16 @@ def launch_isolated(profile, args):
         # subprocess.call (not os.execvpe) — this process survives to save tokens.
         _bash_run(env, f"'{agy_bin}' {extra}".strip())
     finally:
-        # Sweep all candidate token locations and persist the newest one.
+        # Save tokens from real home → profile (agy Path.home() writes)
+        save_back_profile(profile_dir)
+        clear_last_active()
+        # Also harvest tokens written relative to $HOME override
         _harvest_newest_token(profile_dir, session_start_ts)
-        # Persist the authenticated email + last-used timestamp into metadata.
+        # Persist the authenticated email + last-used timestamp
         _persist_profile_email(profile)
 
     sys.exit(0)
+
 
 
 def launch_unified(profile, args):
@@ -989,7 +1063,12 @@ def _cmd_delete(profile_name):
 
 
 def _cmd_duplicate(src_name, dst_name):
-    """Clone a profile — copies the full directory including saved auth tokens."""
+    """Clone a profile's workspace — auth tokens are NOT copied.
+
+    The clone starts with no saved credentials so that launching it triggers
+    a fresh Google sign-in.  This is intentional: if tokens were inherited,
+    both profiles would silently share the same Google account.
+    """
     src = sanitize_name(src_name)
     dst = sanitize_name(dst_name)
     if src is None:
@@ -1003,21 +1082,41 @@ def _cmd_duplicate(src_name, dst_name):
     if dst_dir.exists():
         print(f"{C_RED}Error: Profile '{dst}' already exists.{C_RESET}"); sys.exit(1)
 
-    print(f"Duplicating '{src}' → '{dst}'...")
+    print(f"Duplicating '{src}' → '{dst}' (without auth tokens)...")
     try:
         shutil.copytree(src_dir, dst_dir)
     except Exception as e:
         print(f"{C_RED}Error: {e}{C_RESET}"); sys.exit(1)
 
-    # Fresh metadata for the clone — inherit email, but reset timestamps
-    src_meta = _load_meta(src)
-    _save_meta(dst, email=src_meta.get("email"), created_at=datetime.now().isoformat())
+    # Strip auth tokens from the clone — force a fresh login on first launch
+    stripped = 0
+    for rel in _TOKEN_RELPATHS:
+        token_copy = dst_dir / rel
+        if token_copy.exists():
+            token_copy.unlink()
+            stripped += 1
+    # Also clear tokens inside any .agy_accounts sub-sandboxes
+    agy_inner = dst_dir / ".agy_accounts"
+    if agy_inner.exists():
+        try:
+            for slot in agy_inner.iterdir():
+                if slot.is_dir():
+                    for rel in _TOKEN_RELPATHS:
+                        t = slot / rel
+                        if t.exists():
+                            t.unlink()
+                            stripped += 1
+        except Exception:
+            pass
+
+    # Fresh metadata — no email (different account expected), reset timestamps
+    _save_meta(dst, created_at=datetime.now().isoformat())
     print(f"{C_GREEN}✓ Duplicated '{src}' → '{dst}'.{C_RESET}")
-    if src_meta.get("email"):
-        print(
-            f"{C_GRAY}  Tip: the clone shares the same auth token as '{src}'.\n"
-            f"  Launch it and sign in to a different account to separate them.{C_RESET}"
-        )
+    print(
+        f"{C_YELLOW}  Auth tokens removed from clone ({stripped} file(s) cleared).{C_RESET}\n"
+        f"{C_GRAY}  Launch '{dst}' and sign in with a DIFFERENT Google account.{C_RESET}"
+    )
+
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
