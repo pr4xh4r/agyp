@@ -16,7 +16,7 @@
 ![macOS](https://img.shields.io/badge/macOS-✓-blue?style=flat-square&logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Version](https://img.shields.io/badge/version-1.4.0-orange?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.5.0-orange?style=flat-square)
 
 <img src="assets/mainpage.png" width="48%"> <img src="assets/profilepage.png" width="48%">
 
@@ -36,7 +36,7 @@ With `agyp`, you can create **unlimited profiles**. Hit a limit? Just open `agyp
 ## Features
 
 - ⚡ **Instant Account Switching:** Jump between work, personal, or backup accounts in seconds.
-- 🔒 **Fully Isolated Sessions (Default):** Each profile gets its own separate history, workspace, and auth. Nothing leaks.
+- 🔒 **True Keyring & Session Isolation:** Handles Antigravity's OS Keyring (SecretService / macOS Keychain) token swaps so multiple Google accounts never conflict.
 - 🔄 **Unified Mode:** Want to share your conversation history across different accounts? Unified mode swaps only the auth tokens.
 - 🎨 **Beautiful Interactive TUI:** Flicker-free, arrow-key navigation. Add, rename, and delete profiles right from the terminal.
 - 🏷️ **Smart Labels:** Automatically detects and persistently stores the authenticated Google email next to each profile — even across log rotations.
