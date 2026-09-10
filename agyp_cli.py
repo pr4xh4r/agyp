@@ -74,9 +74,9 @@ _TOKEN_RELPATHS = [
     Path(".gemini") / "google_accounts.json",
 ]
 
-# Email regex — matches foo@bar.com across various log formats (key=val, JSON, plain)
+# Email regex — matches foo@bar.com across various log formats (key=val, JSON, plain, OAuth lines)
 _EMAIL_RE = re.compile(
-    r'email[=:\s"\']+([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})',
+    r'(?:email[=:\s"\']+|authenticated successfully as\s+)([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})',
     re.IGNORECASE,
 )
 
@@ -427,7 +427,23 @@ def _scan_logs_for_email(profile_name):
     """
     profile_dir = PROFILES_DIR / profile_name
 
-    # Check real home first — agy writes here when it ignores the $HOME env var
+    # Check all recent log files in real home (newest first)
+    log_dir = REAL_HOME / ".gemini" / "antigravity-cli" / "log"
+    if log_dir.exists():
+        try:
+            logs = sorted(
+                (f for f in log_dir.iterdir() if f.name.endswith(".log")),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            for log_file in logs[:5]:
+                email = _search_email_in_log(log_file)
+                if email:
+                    return email
+        except Exception:
+            pass
+
+    # Check real home cli.log directly
     email = _search_email_in_log(
         REAL_HOME / ".gemini" / "antigravity-cli" / "cli.log"
     )
@@ -504,8 +520,14 @@ def _preseed_agy_slots(profile_dir):
 # ── Auth status helpers ────────────────────────────────────────────────────────
 
 def _is_fresh_profile(profile_dir):
-    """Return True if this profile has no saved auth tokens (first-time use)."""
+    """Return True if this profile has never been authenticated yet."""
     if (profile_dir / KEYRING_TOKEN_FILE).exists():
+        return False
+    if (profile_dir / ".auth_saved").exists():
+        return False
+    if (profile_dir / ".gemini" / "config" / "config.json").exists():
+        return False
+    if (profile_dir / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt").exists():
         return False
     return not any((profile_dir / rel).exists() for rel in _TOKEN_RELPATHS)
 
@@ -529,6 +551,32 @@ def _deep_clear_real_home_auth():
                 p.unlink()
             except Exception:
                 pass
+
+    # 3. Clear jetski state file
+    js = REAL_HOME / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt"
+    if js.exists():
+        try:
+            shutil.copy2(js, js.with_suffix(".agyp-backup"))
+            js.unlink()
+        except Exception:
+            pass
+
+    # 4. Clear cache
+    cache_dir = REAL_HOME / ".gemini" / "antigravity-cli" / "cache"
+    if cache_dir.exists():
+        try:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    # 5. Clear config.json
+    cfg = REAL_HOME / ".gemini" / "config" / "config.json"
+    if cfg.exists():
+        try:
+            shutil.copy2(cfg, cfg.with_suffix(".agyp-backup"))
+            cfg.unlink()
+        except Exception:
+            pass
 
     # Broader sweep: any other .json files inside ~/.gemini/antigravity-cli/
     cli_dir = REAL_HOME / ".gemini" / "antigravity-cli"
@@ -687,7 +735,32 @@ def _harvest_newest_token(profile_dir, session_start_ts):
 
 
 def swap_in_profile(profile_dir):
-    """Unified mode: copy profile tokens into live HOME."""
+    """Restore profile's saved auth, config, and credentials into REAL_HOME."""
+    prof_gemini = profile_dir / ".gemini"
+    if prof_gemini.exists():
+        try:
+            # 1. Config directory (contains config.json, projects)
+            src_cfg = prof_gemini / "config"
+            if src_cfg.exists():
+                dst_cfg = REAL_HOME / ".gemini" / "config"
+                dst_cfg.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(src_cfg, dst_cfg, dirs_exist_ok=True)
+
+            # 2. Antigravity-cli state and cache
+            src_cli = prof_gemini / "antigravity-cli"
+            if src_cli.exists():
+                dst_cli = REAL_HOME / ".gemini" / "antigravity-cli"
+                dst_cli.mkdir(parents=True, exist_ok=True)
+                for fname in ["jetski_state.pbtxt", "settings.json", "installation_id"]:
+                    f = src_cli / fname
+                    if f.exists():
+                        shutil.copy2(f, dst_cli / fname)
+                src_cache = src_cli / "cache"
+                if src_cache.exists():
+                    shutil.copytree(src_cache, dst_cli / "cache", dirs_exist_ok=True)
+        except Exception:
+            pass
+
     for rel in _TOKEN_RELPATHS:
         src = profile_dir / rel
         dst = REAL_HOME / rel
@@ -703,7 +776,33 @@ def swap_in_profile(profile_dir):
 
 
 def save_back_profile(profile_dir):
-    """Unified mode: save updated tokens back into profile after session ends."""
+    """Save updated auth, config, and credentials back into profile after session ends."""
+    try:
+        # 1. Sync config directory
+        src_cfg = REAL_HOME / ".gemini" / "config"
+        if src_cfg.exists():
+            dst_cfg = profile_dir / ".gemini" / "config"
+            dst_cfg.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src_cfg, dst_cfg, dirs_exist_ok=True)
+
+        # 2. Sync antigravity-cli state and cache
+        cli_dir = REAL_HOME / ".gemini" / "antigravity-cli"
+        if cli_dir.exists():
+            dst_cli = profile_dir / ".gemini" / "antigravity-cli"
+            dst_cli.mkdir(parents=True, exist_ok=True)
+            for fname in ["jetski_state.pbtxt", "settings.json", "installation_id"]:
+                f = cli_dir / fname
+                if f.exists():
+                    shutil.copy2(f, dst_cli / fname)
+            src_cache = cli_dir / "cache"
+            if src_cache.exists():
+                shutil.copytree(src_cache, dst_cli / "cache", dirs_exist_ok=True)
+
+        # 3. Mark authentication saved for this profile
+        (profile_dir / ".auth_saved").touch()
+    except Exception:
+        pass
+
     for rel in _TOKEN_RELPATHS:
         src = REAL_HOME / rel
         dst = profile_dir / rel
@@ -1435,9 +1534,13 @@ def _cmd_duplicate(src_name, dst_name):
 
     # Strip auth tokens from the clone — force a fresh login on first launch
     stripped = 0
-    keyring_clone = dst_dir / KEYRING_TOKEN_FILE
-    if keyring_clone.exists():
-        keyring_clone.unlink()
+    for f in [dst_dir / KEYRING_TOKEN_FILE, dst_dir / ".auth_saved"]:
+        if f.exists():
+            f.unlink()
+            stripped += 1
+    dst_gemini = dst_dir / ".gemini"
+    if dst_gemini.exists():
+        shutil.rmtree(dst_gemini, ignore_errors=True)
         stripped += 1
     for rel in _TOKEN_RELPATHS:
         token_copy = dst_dir / rel
@@ -1487,10 +1590,16 @@ def _cmd_reset_auth(profile_name):
     old_email = get_profile_email(name) or "none"
     cleared = 0
 
-    # Remove keyring token file
-    kf = target / KEYRING_TOKEN_FILE
-    if kf.exists():
-        kf.unlink()
+    # Remove keyring token file and auth_saved marker
+    for f in [target / KEYRING_TOKEN_FILE, target / ".auth_saved"]:
+        if f.exists():
+            f.unlink()
+            cleared += 1
+
+    # Remove saved .gemini state
+    prof_gemini = target / ".gemini"
+    if prof_gemini.exists():
+        shutil.rmtree(prof_gemini, ignore_errors=True)
         cleared += 1
 
     # Clear system keyring item so next launch is guaranteed clean!
