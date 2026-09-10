@@ -52,6 +52,7 @@ VERSION = "1.5.0"
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
 C_GREEN  = "\033[38;2;52;168;83m"
+C_CYAN   = "\033[38;2;76;201;240m"
 C_RED    = "\033[38;2;234;67;53m"
 C_YELLOW = "\033[38;2;251;188;5m"
 C_WHITE  = "\033[37m"          # plain white — no bold, prevents icon size jump
@@ -801,8 +802,10 @@ def launch_isolated(profile, args):
         _save_meta(profile, created_at=datetime.now().isoformat())
 
     fresh = _is_fresh_profile(profile_dir)
+    p_email = get_profile_email(profile)
+    email_tag = f"  [{C_CYAN}{p_email}{C_BLUE}]" if p_email else f"  [{C_YELLOW}login required{C_BLUE}]"
 
-    print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}isolated{C_BLUE}]{C_RESET}")
+    print(f"\n{C_BLUE}Switching to profile '{C_WHITE}{profile}{C_BLUE}'{email_tag}  [{C_YELLOW}isolated{C_BLUE}]{C_RESET}")
     print(f"{C_GREEN}Launching isolated environment...{C_RESET}")
 
     private_browser = None
@@ -905,7 +908,9 @@ def launch_unified(profile, args):
         print(f"\n{C_YELLOW}Warning: already inside an agy session. A conflict may occur.{C_RESET}")
         print(f"{C_GRAY}Consider using isolated mode instead.{C_RESET}\n")
 
-    print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}unified{C_BLUE}]{C_RESET}")
+    p_email = get_profile_email(profile)
+    email_tag = f"  [{C_CYAN}{p_email}{C_BLUE}]" if p_email else f"  [{C_YELLOW}login required{C_BLUE}]"
+    print(f"\n{C_BLUE}Switching to profile '{C_WHITE}{profile}{C_BLUE}'{email_tag}  [{C_YELLOW}unified{C_BLUE}]{C_RESET}")
 
     # Swap system keyring token
     keyring_file = profile_dir / KEYRING_TOKEN_FILE
@@ -1146,21 +1151,17 @@ def interactive_menu(profiles, launch_mode="isolated"):
 
             for i, opt in enumerate(options):
                 suffix = ""
-                if mode == "main" and i < len(profiles):
+                if i < len(profiles) and mode in ("main", "delete", "rename"):
                     email = get_profile_email(opt)
                     if email:
-                        suffix = f"  {C_GRAY}[{email}]{C_RESET}"
+                        suffix = f"  {C_CYAN}[{email}]{C_RESET}"
                     else:
-                        # Fall back to last-used date so the row isn't blank
-                        meta = _load_meta(opt)
-                        lu = meta.get("last_used")
-                        if lu:
-                            suffix = f"  {C_GRAY}[last: {lu[:10]}]{C_RESET}"
+                        suffix = f"  {C_YELLOW}[no account — login on launch]{C_RESET}"
                 if i == current_idx:
                     print(f"  {C_BLUE}\u276f {opt}{suffix}{C_RESET}")
                 else:
                     if not opt.startswith('\033'):
-                        print(f"    {C_GRAY}{opt}{C_RESET}{suffix}")
+                        print(f"    {C_WHITE}{opt}{C_RESET}{suffix}")
                     else:
                         print(f"    {opt}{suffix}")
 
@@ -1306,12 +1307,15 @@ def _cmd_list():
         last_used = meta.get("last_used", "")
         created   = meta.get("created_at", "")
 
-        email_part = f"  {C_GRAY}[{email}]{C_RESET}" if email else ""
+        if email:
+            email_part = f"  {C_CYAN}[{email}]{C_RESET}"
+        else:
+            email_part = f"  {C_YELLOW}[no account — login on launch]{C_RESET}"
         date_part  = (
             f"  {C_GRAY}last: {last_used[:10]}{C_RESET}" if last_used else
             (f"  {C_GRAY}created: {created[:10]}{C_RESET}" if created else "")
         )
-        print(f"  {C_BLUE}·{C_RESET} {p}{email_part}{date_part}")
+        print(f"  {C_BLUE}·{C_RESET} {C_WHITE}{p}{C_RESET}{email_part}{date_part}")
     print()
 
 
