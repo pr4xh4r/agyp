@@ -14,9 +14,13 @@ oauth_creds.json
 google_accounts.json
 *.token
 *.credentials
+keyring_token.json
+.auth_saved
+.gemini/
 
 # Profile data stays local, never in repo
 .agyp-profiles/
+agyp-profiles/
 
 # OS
 .DS_Store
