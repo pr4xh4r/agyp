@@ -89,29 +89,6 @@ You'll be greeted by an interactive menu to choose your launch mode and select a
 | `agyp --version` | Show version |
 | `agyp --help` | Show help |
 
-### Example Workflow
-
-```bash
-# See all your profiles and which accounts they're using
-agyp list
-
-# Inspect a specific profile
-agyp info work
-
-# Jump straight into a profile (no TUI)
-agyp personal
-
-# Hit the rate limit? Switch instantly
-agyp backup
-
-# Clone your work profile to start a second work account
-agyp duplicate work work2
-
-# Clean up an old profile
-agyp delete old-profile
-```
-
----
 
 ## How It Works
 
