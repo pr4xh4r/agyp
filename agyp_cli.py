@@ -47,7 +47,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.4.2"
+VERSION = "1.5.0"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -78,6 +78,151 @@ _EMAIL_RE = re.compile(
     r'email[=:\s"\']+([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})',
     re.IGNORECASE,
 )
+
+
+KEYRING_TOKEN_FILE = "keyring_token.json"
+
+
+# ── System Keyring Token Manager ──────────────────────────────────────────────
+# Antigravity (agy) stores its OAuth tokens in the system keyring
+# (SecretService via DBus on Linux, Keychain on macOS) under service "gemini"
+# and username "antigravity".  Because the keyring is system-wide, profile
+# environments share the same credentials unless agyp actively manages the
+# keyring item per profile.
+
+class KeyringManager:
+    SERVICE = "gemini"
+    USERNAME = "antigravity"
+
+    @classmethod
+    def get_token(cls):
+        """Read the raw OAuth JSON token string from the system keyring."""
+        if sys.platform == "darwin":
+            try:
+                out = subprocess.check_output(
+                    ["security", "find-generic-password", "-s", cls.SERVICE, "-a", cls.USERNAME, "-w"],
+                    stderr=subprocess.DEVNULL
+                )
+                return out.decode("utf-8").strip()
+            except Exception:
+                return None
+        elif sys.platform.startswith("linux"):
+            try:
+                import dbus
+                bus = dbus.SessionBus()
+                service = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets")
+                iface = dbus.Interface(service, "org.freedesktop.Secret.Service")
+                res = iface.SearchItems({"service": cls.SERVICE, "username": cls.USERNAME})
+                if not res[0]:
+                    return None
+                output, session_path = iface.OpenSession("plain", dbus.String("", variant_level=1))
+                item_obj = bus.get_object("org.freedesktop.secrets", res[0][0])
+                secret_struct = item_obj.GetSecret(session_path, dbus_interface="org.freedesktop.Secret.Item")
+                return bytes(secret_struct[2]).decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+        return None
+
+    @classmethod
+    def set_token(cls, token_str):
+        """Write the raw OAuth JSON token string into the system keyring."""
+        if not token_str:
+            return cls.delete_token()
+        if sys.platform == "darwin":
+            try:
+                subprocess.run(
+                    ["security", "add-generic-password", "-U", "-s", cls.SERVICE, "-a", cls.USERNAME, "-w", token_str],
+                    check=True, stderr=subprocess.DEVNULL
+                )
+                return True
+            except Exception:
+                return False
+        elif sys.platform.startswith("linux"):
+            try:
+                import dbus
+                bus = dbus.SessionBus()
+                service = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets")
+                iface = dbus.Interface(service, "org.freedesktop.Secret.Service")
+                output, session_path = iface.OpenSession("plain", dbus.String("", variant_level=1))
+
+                # Delete existing item first to ensure clean overwrite
+                res = iface.SearchItems({"service": cls.SERVICE, "username": cls.USERNAME})
+                for p in res[0]:
+                    try:
+                        bus.get_object("org.freedesktop.secrets", p).Delete(dbus_interface="org.freedesktop.Secret.Item")
+                    except Exception:
+                        pass
+
+                col_obj = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets/aliases/default")
+                col_iface = dbus.Interface(col_obj, "org.freedesktop.Secret.Collection")
+                props = {
+                    "org.freedesktop.Secret.Item.Label": dbus.String(f"Password for \x27{cls.USERNAME}\x27 on \x27{cls.SERVICE}\x27"),
+                    "org.freedesktop.Secret.Item.Attributes": dbus.Dictionary({
+                        "service": cls.SERVICE,
+                        "username": cls.USERNAME
+                    }, signature="ss")
+                }
+                secret = dbus.Struct((
+                    session_path,
+                    dbus.ByteArray(b""),
+                    dbus.ByteArray(token_str.encode("utf-8")),
+                    dbus.String("text/plain")
+                ))
+                col_iface.CreateItem(props, secret, True)
+                return True
+            except Exception:
+                return False
+        return False
+
+    @classmethod
+    def delete_token(cls):
+        """Delete the Antigravity OAuth token from the system keyring."""
+        if sys.platform == "darwin":
+            try:
+                subprocess.run(
+                    ["security", "delete-generic-password", "-s", cls.SERVICE, "-a", cls.USERNAME],
+                    stderr=subprocess.DEVNULL
+                )
+                return True
+            except Exception:
+                return False
+        elif sys.platform.startswith("linux"):
+            try:
+                import dbus
+                bus = dbus.SessionBus()
+                service = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets")
+                iface = dbus.Interface(service, "org.freedesktop.Secret.Service")
+                res = iface.SearchItems({"service": cls.SERVICE, "username": cls.USERNAME})
+                for p in res[0]:
+                    try:
+                        bus.get_object("org.freedesktop.secrets", p).Delete(dbus_interface="org.freedesktop.Secret.Item")
+                    except Exception:
+                        pass
+                return True
+            except Exception:
+                return False
+        return False
+
+    @classmethod
+    def extract_email(cls, token_str):
+        """Extract user email from the JWT id_token inside the stored JSON token."""
+        if not token_str:
+            return None
+        try:
+            import base64
+            data = json.loads(token_str)
+            id_token = data.get("id_token")
+            if id_token and isinstance(id_token, str) and "." in id_token:
+                parts = id_token.split(".")
+                if len(parts) >= 2:
+                    p = parts[1] + "=" * (-len(parts[1]) % 4)
+                    payload = json.loads(base64.urlsafe_b64decode(p))
+                    email = payload.get("email")
+                    if email and "@" in email:
+                        return email
+        except Exception:
+            pass
+        return None
 
 
 # ── Flicker-free terminal buffer ───────────────────────────────────────────────
@@ -220,10 +365,10 @@ def get_profile_email(profile_name):
     """Return the authenticated email for a profile, or None.
 
     Priority:
-      1. Persistent metadata (.meta/<name>.json) — fastest and most reliable.
-      2. Top-level cli.log at profile_dir/.gemini/antigravity-cli/cli.log.
-      3. cli.log inside .agy_accounts/<slot>/ sub-sandboxes (newest slot first)
-         — this is where agy actually writes logs during an isolated session.
+      1. Persistent metadata (.meta/<name>.json) — fastest.
+      2. Profile's keyring_token.json (parses real Google id_token JWT).
+      3. Top-level cli.log at profile_dir/.gemini/antigravity-cli/cli.log.
+      4. cli.log inside .agy_accounts/<slot>/ sub-sandboxes (newest slot first).
     """
     # 1. Metadata (persisted after every session)
     meta = _load_meta(profile_name)
@@ -232,7 +377,18 @@ def get_profile_email(profile_name):
 
     profile_dir = PROFILES_DIR / profile_name
 
-    # 2. Top-level log (unified mode / some agy versions write here directly)
+    # 2. Extract directly from profile's saved keyring token
+    token_file = profile_dir / KEYRING_TOKEN_FILE
+    if token_file.exists():
+        try:
+            email = KeyringManager.extract_email(token_file.read_text(encoding="utf-8"))
+            if email:
+                _save_meta(profile_name, email=email)
+                return email
+        except Exception:
+            pass
+
+    # 3. Top-level log (unified mode / some agy versions write here directly)
     email = _search_email_in_log(
         profile_dir / ".gemini" / "antigravity-cli" / "cli.log"
     )
@@ -348,18 +504,22 @@ def _preseed_agy_slots(profile_dir):
 
 def _is_fresh_profile(profile_dir):
     """Return True if this profile has no saved auth tokens (first-time use)."""
+    if (profile_dir / KEYRING_TOKEN_FILE).exists():
+        return False
     return not any((profile_dir / rel).exists() for rel in _TOKEN_RELPATHS)
 
 
 def _deep_clear_real_home_auth():
     """Aggressively clear ALL credential-related files from the real ~/.gemini/
-    before launching a fresh profile.
+    AND clear the system keyring before launching a fresh profile.
 
-    We back up the 3 known token files AND any other .json files inside
-    ~/.gemini/antigravity-cli/ — agy may create credential files we don't
-    know about. All are renamed to .agyp-backup so the next save_back_profile
-    call only writes what the new session actually authenticated.
+    This ensures agy cannot find any existing authentication state and is
+    forced to trigger a clean OAuth flow.
     """
+    # 1. Clear system keyring item
+    KeyringManager.delete_token()
+
+    # 2. Clear known file tokens
     for rel in _TOKEN_RELPATHS:
         p = REAL_HOME / rel
         if p.exists():
@@ -384,18 +544,50 @@ def _deep_clear_real_home_auth():
             pass
 
 
-def _warn_browser_account_switch(profile_name):
+def _get_private_browser_cmd():
+    """Detect an installed browser and return a command that opens a private window.
+
+    When agy does Google OAuth it calls the system browser via the BROWSER env
+    var (or webbrowser module default).  If we set BROWSER to an incognito/private
+    command, the OAuth page opens in a clean session with NO pre-logged-in Google
+    account — forcing a genuine fresh sign-in where the user can pick any account.
+
+    Returns a BROWSER-format string (with %s placeholder for the URL), or None
+    if no supported browser is found.
+    """
+    candidates = [
+        ("google-chrome",        "--incognito"),
+        ("google-chrome-stable", "--incognito"),
+        ("chromium-browser",     "--incognito"),
+        ("chromium",             "--incognito"),
+        ("brave-browser",        "--incognito"),
+        ("brave",                "--incognito"),
+        ("microsoft-edge",       "--inprivate"),
+        ("firefox",              "--private-window"),
+        ("firefox-esr",          "--private-window"),
+    ]
+    for browser, flag in candidates:
+        if shutil.which(browser):
+            return f"{browser} {flag} %s"
+    return None
+
+
+def _warn_browser_account_switch(profile_name, private_browser):
     """Print an unmissable warning before a profile's first-ever login."""
     border = C_YELLOW + "═" * 56 + C_RESET
     print(f"\n{border}")
     print(f"  {C_YELLOW}⚠  NEW PROFILE — FRESH GOOGLE SIGN-IN REQUIRED{C_RESET}")
     print(f"{border}")
-    print(f"  A browser window will open for Google authentication.\n")
-    print(f"  {C_WHITE}To use a DIFFERENT account from your other profiles:{C_RESET}")
-    print(f"  {C_GREEN}1.{C_RESET} In the browser, click {C_WHITE}\"Use another account\"{C_RESET}")
-    print(f"  {C_GREEN}2.{C_RESET} Sign in with a {C_GREEN}different{C_RESET} Google account")
-    print(f"  {C_GREEN}3.{C_RESET} No extra account? Create one at {C_GRAY}accounts.google.com{C_RESET}\n")
-    print(f"  {C_GRAY}Signed in with the same account by accident?")
+    if private_browser:
+        print(f"  {C_GREEN}✓ Opening a PRIVATE browser window automatically.{C_RESET}")
+        print(f"  {C_GRAY}  (No cached Google account — you choose who to log in as.){C_RESET}\n")
+    else:
+        print(f"  A browser window will open for Google authentication.\n")
+        print(f"  {C_WHITE}IMPORTANT — to use a DIFFERENT Google account:{C_RESET}")
+        print(f"  {C_GREEN}1.{C_RESET} In the browser, click {C_WHITE}\"Use another account\"{C_RESET}")
+        print(f"  {C_GREEN}2.{C_RESET} Sign in with a {C_GREEN}different{C_RESET} Google account\n")
+    print(f"  {C_GRAY}No second Google account yet? Create one at accounts.google.com")
+    print(f"  Signed in with the same account by accident?")
     print(f"  Run: agyp reset-auth {profile_name}{C_RESET}")
     print(f"{border}\n")
 
@@ -613,20 +805,36 @@ def launch_isolated(profile, args):
     print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}isolated{C_BLUE}]{C_RESET}")
     print(f"{C_GREEN}Launching isolated environment...{C_RESET}")
 
+    private_browser = None
     if fresh:
-        # Show unmissable instructions BEFORE the browser opens
-        _warn_browser_account_switch(profile)
-        # Aggressively clear ALL real-home credentials (not just the 3 we know)
-        # so agy cannot silently reuse a cached account from a previous session.
+        # Detect an incognito/private browser to force a clean Google sign-in.
+        # Setting BROWSER in the env means agy's OAuth opens in a private window
+        # where NO Google account is pre-logged-in — user chooses freely.
+        private_browser = _get_private_browser_cmd()
+        _warn_browser_account_switch(profile, private_browser)
+        # Clear ALL real-home credentials so agy cannot reuse a cached account.
         _deep_clear_real_home_auth()
     else:
         print()
 
     session_start_ts = time.time()
 
+    # ── Layer 0: Swap system keyring token (SecretService / Keychain) ───────────
+    # agy reads/writes its primary OAuth token from the system keyring.
+    # We must load this profile's token into the keyring, or clear it if fresh!
+    keyring_file = profile_dir / KEYRING_TOKEN_FILE
+    if keyring_file.exists():
+        try:
+            tok = keyring_file.read_text(encoding="utf-8").strip()
+            if tok:
+                KeyringManager.set_token(tok)
+        except Exception:
+            pass
+    else:
+        # Fresh or reset profile: CLEAR the keyring so agy is forced to prompt for login!
+        KeyringManager.delete_token()
+
     # ── Layer 1: Swap profile tokens into the REAL home ────────────────────────
-    # This guarantees agy picks up the right credentials even if it uses
-    # Path.home() internally and ignores our $HOME override.
     swap_in_profile(profile_dir)
     set_last_active(profile)
 
@@ -636,7 +844,14 @@ def launch_isolated(profile, args):
     for xdg in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]:
         env.pop(xdg, None)
 
-    # ── Layer 3: Pre-seed any existing .agy_accounts/ slots ───────────────────
+    # ── Layer 3: For fresh profiles, force private/incognito browser ───────────
+    # This is the key fix: agy's OAuth opens in a clean browser session with
+    # no pre-logged-in Google account, so the user MUST choose which account
+    # to sign in with — no silent auto-selection of the "wrong" account.
+    if private_browser:
+        env["BROWSER"] = private_browser
+
+    # ── Layer 4: Pre-seed any existing .agy_accounts/ slots ───────────────────
     _preseed_agy_slots(profile_dir)
 
     extra = " ".join(f"'{a}'" for a in args) if args else ""
@@ -644,6 +859,17 @@ def launch_isolated(profile, args):
         # subprocess.call (not os.execvpe) — this process survives to save tokens.
         _bash_run(env, f"'{agy_bin}' {extra}".strip())
     finally:
+        # Capture token from system keyring and save to profile
+        try:
+            current_keyring_tok = KeyringManager.get_token()
+            if current_keyring_tok:
+                keyring_file.write_text(current_keyring_tok, encoding="utf-8")
+                extracted = KeyringManager.extract_email(current_keyring_tok)
+                if extracted:
+                    _save_meta(profile, email=extracted)
+        except Exception:
+            pass
+
         # Save tokens from real home → profile (captures agy's Path.home() writes)
         save_back_profile(profile_dir)
         clear_last_active()
@@ -655,6 +881,7 @@ def launch_isolated(profile, args):
         _warn_duplicate_email(profile, detected_email)
 
     sys.exit(0)
+
 
 
 
@@ -679,6 +906,19 @@ def launch_unified(profile, args):
         print(f"{C_GRAY}Consider using isolated mode instead.{C_RESET}\n")
 
     print(f"\n{C_BLUE}Switching to profile '{profile}'  [{C_YELLOW}unified{C_BLUE}]{C_RESET}")
+
+    # Swap system keyring token
+    keyring_file = profile_dir / KEYRING_TOKEN_FILE
+    if keyring_file.exists():
+        try:
+            tok = keyring_file.read_text(encoding="utf-8").strip()
+            if tok:
+                KeyringManager.set_token(tok)
+        except Exception:
+            pass
+    else:
+        KeyringManager.delete_token()
+
     swap_in_profile(profile_dir)
     set_last_active(profile)
     print(f"{C_GREEN}Auth tokens swapped. Launching...{C_RESET}\n")
@@ -687,6 +927,16 @@ def launch_unified(profile, args):
     try:
         _bash_run(os.environ.copy(), f"'{agy_bin}' {extra}".strip())
     finally:
+        try:
+            current_keyring_tok = KeyringManager.get_token()
+            if current_keyring_tok:
+                keyring_file.write_text(current_keyring_tok, encoding="utf-8")
+                extracted = KeyringManager.extract_email(current_keyring_tok)
+                if extracted:
+                    _save_meta(profile, email=extracted)
+        except Exception:
+            pass
+
         save_back_profile(profile_dir)
         clear_last_active()
         _persist_profile_email(profile)
@@ -1093,7 +1343,7 @@ def _cmd_info(profile_name):
         size_str = "—"
 
     # Auth token status
-    has_token = any((target / rel).exists() for rel in _TOKEN_RELPATHS)
+    has_token = (target / KEYRING_TOKEN_FILE).exists() or any((target / rel).exists() for rel in _TOKEN_RELPATHS)
     token_str = (
         f"{C_GREEN}saved{C_RESET}"
         if has_token
@@ -1181,6 +1431,10 @@ def _cmd_duplicate(src_name, dst_name):
 
     # Strip auth tokens from the clone — force a fresh login on first launch
     stripped = 0
+    keyring_clone = dst_dir / KEYRING_TOKEN_FILE
+    if keyring_clone.exists():
+        keyring_clone.unlink()
+        stripped += 1
     for rel in _TOKEN_RELPATHS:
         token_copy = dst_dir / rel
         if token_copy.exists():
@@ -1229,6 +1483,15 @@ def _cmd_reset_auth(profile_name):
     old_email = get_profile_email(name) or "none"
     cleared = 0
 
+    # Remove keyring token file
+    kf = target / KEYRING_TOKEN_FILE
+    if kf.exists():
+        kf.unlink()
+        cleared += 1
+
+    # Clear system keyring item so next launch is guaranteed clean!
+    KeyringManager.delete_token()
+
     # Remove known token files from the profile dir
     for rel in _TOKEN_RELPATHS:
         p = target / rel
@@ -1258,8 +1521,7 @@ def _cmd_reset_auth(profile_name):
     print(f"{C_GREEN}✓ Auth reset for profile '{name}'.{C_RESET}")
     print(f"  {C_GRAY}Removed {cleared} token file(s).  Previous account: {old_email}{C_RESET}")
     print(f"\n  Next launch will prompt for a fresh Google sign-in.")
-    print(f"  {C_WHITE}In the browser → click 'Use another account'{C_RESET}")
-    print(f"  to authenticate with a different Google account.\n")
+    print(f"  {C_WHITE}In the browser → sign in with your DIFFERENT Google account.{C_RESET}\n")
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
