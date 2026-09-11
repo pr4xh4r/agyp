@@ -110,20 +110,43 @@ class KeyringManager:
             except Exception:
                 return None
         elif sys.platform.startswith("linux"):
+            # 1. Native D-Bus SecretService (fastest, standard on desktop Linux)
             try:
                 import dbus
                 bus = dbus.SessionBus()
                 service = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets")
                 iface = dbus.Interface(service, "org.freedesktop.Secret.Service")
                 res = iface.SearchItems({"service": cls.SERVICE, "username": cls.USERNAME})
-                if not res[0]:
-                    return None
-                output, session_path = iface.OpenSession("plain", dbus.String("", variant_level=1))
-                item_obj = bus.get_object("org.freedesktop.secrets", res[0][0])
-                secret_struct = item_obj.GetSecret(session_path, dbus_interface="org.freedesktop.Secret.Item")
-                return bytes(secret_struct[2]).decode("utf-8", errors="ignore")
+                if res and res[0]:
+                    output, session_path = iface.OpenSession("plain", dbus.String("", variant_level=1))
+                    item_obj = bus.get_object("org.freedesktop.secrets", res[0][0])
+                    secret_struct = item_obj.GetSecret(session_path, dbus_interface="org.freedesktop.Secret.Item")
+                    return bytes(secret_struct[2]).decode("utf-8", errors="ignore")
             except Exception:
-                return None
+                pass
+
+            # 2. CLI secret-tool fallback (libsecret)
+            if shutil.which("secret-tool"):
+                try:
+                    out = subprocess.check_output(
+                        ["secret-tool", "lookup", "service", cls.SERVICE, "username", cls.USERNAME],
+                        stderr=subprocess.DEVNULL, timeout=3
+                    )
+                    tok = out.decode("utf-8").strip()
+                    if tok:
+                        return tok
+                except Exception:
+                    pass
+
+            # 3. python-keyring module fallback
+            try:
+                import keyring
+                tok = keyring.get_password(cls.SERVICE, cls.USERNAME)
+                if tok:
+                    return tok
+            except Exception:
+                pass
+
         return None
 
     @classmethod
@@ -141,6 +164,7 @@ class KeyringManager:
             except Exception:
                 return False
         elif sys.platform.startswith("linux"):
+            # 1. Native D-Bus SecretService
             try:
                 import dbus
                 bus = dbus.SessionBus()
@@ -174,7 +198,30 @@ class KeyringManager:
                 col_iface.CreateItem(props, secret, True)
                 return True
             except Exception:
-                return False
+                pass
+
+            # 2. CLI secret-tool fallback (libsecret)
+            if shutil.which("secret-tool"):
+                try:
+                    subprocess.run(
+                        ["secret-tool", "store", f"--label=Password for '{cls.USERNAME}' on '{cls.SERVICE}'", "service", cls.SERVICE, "username", cls.USERNAME],
+                        input=token_str.encode("utf-8"),
+                        check=True,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3
+                    )
+                    return True
+                except Exception:
+                    pass
+
+            # 3. python-keyring fallback
+            try:
+                import keyring
+                keyring.set_password(cls.SERVICE, cls.USERNAME, token_str)
+                return True
+            except Exception:
+                pass
+
         return False
 
     @classmethod
@@ -190,6 +237,7 @@ class KeyringManager:
             except Exception:
                 return False
         elif sys.platform.startswith("linux"):
+            # 1. Native D-Bus SecretService
             try:
                 import dbus
                 bus = dbus.SessionBus()
@@ -203,7 +251,29 @@ class KeyringManager:
                         pass
                 return True
             except Exception:
-                return False
+                pass
+
+            # 2. CLI secret-tool fallback
+            if shutil.which("secret-tool"):
+                try:
+                    subprocess.run(
+                        ["secret-tool", "clear", "service", cls.SERVICE, "username", cls.USERNAME],
+                        check=True,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3
+                    )
+                    return True
+                except Exception:
+                    pass
+
+            # 3. python-keyring fallback
+            try:
+                import keyring
+                keyring.delete_password(cls.SERVICE, cls.USERNAME)
+                return True
+            except Exception:
+                pass
+
         return False
 
     @classmethod
@@ -606,6 +676,19 @@ def _get_private_browser_cmd():
     Returns a BROWSER-format string (with %s placeholder for the URL), or None
     if no supported browser is found.
     """
+    if sys.platform == "darwin":
+        mac_apps = [
+            ("/Applications/Google Chrome.app", 'open -na "Google Chrome" --args --incognito %s'),
+            ("/Applications/Brave Browser.app", 'open -na "Brave Browser" --args --incognito %s'),
+            ("/Applications/Microsoft Edge.app", 'open -na "Microsoft Edge" --args --inprivate %s'),
+            ("/Applications/Firefox.app", 'open -na "Firefox" --args --private-window %s'),
+            (os.path.expanduser("~/Applications/Google Chrome.app"), 'open -na "Google Chrome" --args --incognito %s'),
+            (os.path.expanduser("~/Applications/Brave Browser.app"), 'open -na "Brave Browser" --args --incognito %s'),
+        ]
+        for app_path, cmd in mac_apps:
+            if os.path.exists(app_path):
+                return cmd
+
     candidates = [
         ("google-chrome",        "--incognito"),
         ("google-chrome-stable", "--incognito"),
@@ -908,7 +991,7 @@ def inside_agy_session():
 # ── agy binary resolution ──────────────────────────────────────────────────────
 
 def _resolve_agy():
-    """Return path to the agy binary, respecting custom config."""
+    """Return path to the agy binary, respecting custom config and standard locations."""
     custom = None
     try:
         if CONFIG_FILE.exists():
@@ -917,7 +1000,23 @@ def _resolve_agy():
         pass
     if custom and os.path.isfile(custom):
         return custom
-    return shutil.which("agy")
+
+    found = shutil.which("agy")
+    if found:
+        return found
+
+    # Fallback search in standard paths across Linux and macOS
+    fallbacks = [
+        REAL_HOME / ".local" / "bin" / "agy",
+        Path("/opt/homebrew/bin/agy"),       # macOS Apple Silicon
+        Path("/usr/local/bin/agy"),         # macOS Intel / Linux
+        REAL_HOME / ".gemini" / "antigravity-cli" / "bin" / "agy",
+    ]
+    for p in fallbacks:
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+
+    return None
 
 
 # ── Launch helpers ─────────────────────────────────────────────────────────────

@@ -2,8 +2,14 @@
 set -e
 
 # agyp — Linux/macOS CLI-only installer
-# Resolve the real user home — prevents issues when run inside an isolated profile env
-REAL_HOME="$(getent passwd "$USER" 2>/dev/null | cut -d: -f6 || echo "$HOME")"
+# Resolve real user home — works across all Linux distributions and macOS
+if command -v python3 &>/dev/null; then
+    REAL_HOME="$(python3 -c "import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)" 2>/dev/null || echo "$HOME")"
+else
+    REAL_HOME="$(getent passwd "$USER" 2>/dev/null | cut -d: -f6)"
+    [ -z "$REAL_HOME" ] && REAL_HOME="$HOME"
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$REAL_HOME/.local/bin"
 INSTALL_DIR="$REAL_HOME/.local/share/agyp"   # stable copy — survives repo moves
@@ -16,6 +22,16 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 echo "[*] Python 3 found: $(python3 --version)"
+
+# ── OS & Keyring check ────────────────────────────────────────────────────────
+OS_NAME="$(uname -s)"
+if [ "$OS_NAME" = "Linux" ]; then
+    if ! python3 -c "import dbus" 2>/dev/null && ! command -v secret-tool &>/dev/null; then
+        echo "[i] Note: For desktop keyring integration, python3-dbus or secret-tool is recommended."
+    fi
+elif [ "$OS_NAME" = "Darwin" ]; then
+    echo "[*] macOS detected (native Keychain integration enabled)"
+fi
 
 # ── Copy CLI script to stable location ───────────────────────────────────────
 echo "[*] Installing agyp_cli.py to $INSTALL_DIR..."
