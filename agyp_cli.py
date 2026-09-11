@@ -18,6 +18,8 @@ import atexit
 import termios
 import subprocess
 import webbrowser
+import signal
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -827,6 +829,77 @@ def clear_last_active():
         pass
 
 
+def _sync_profile_now(profile_name, profile_dir):
+    """Safely and immediately syncs live tokens and config into profile_dir.
+
+    Called during active sessions by the background watchdog thread and signal
+    handlers so that credentials are saved within seconds of Google OAuth
+    completion, without having to wait for the user to exit agy.
+    """
+    try:
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        keyring_file = profile_dir / KEYRING_TOKEN_FILE
+
+        # 1. Capture token from system keyring and save to profile
+        tok = KeyringManager.get_token()
+        if tok:
+            prev = None
+            if keyring_file.exists():
+                try:
+                    prev = keyring_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+            if tok != prev:
+                keyring_file.write_text(tok, encoding="utf-8")
+
+            # Extract email from JWT id_token
+            extracted = KeyringManager.extract_email(tok)
+            if extracted:
+                _save_meta(profile_name, email=extracted, last_used=datetime.now().isoformat())
+
+        # 2. Mirror full .gemini directory state (jetski_state, settings, config)
+        save_back_profile(profile_dir)
+
+        # 3. If email still not in metadata, scan logs
+        meta = _load_meta(profile_name)
+        if not meta.get("email"):
+            _persist_profile_email(profile_name)
+    except Exception:
+        pass
+
+
+def _start_autosync_watcher(profile_name, profile_dir):
+    """Start a background daemon thread that polls for newly acquired credentials
+    every 2 seconds and persists them immediately into profile_dir.
+    """
+    stop_event = threading.Event()
+
+    def _watcher_loop():
+        while not stop_event.is_set():
+            _sync_profile_now(profile_name, profile_dir)
+            stop_event.wait(2.0)
+
+    t = threading.Thread(target=_watcher_loop, name=f"agyp-sync-{profile_name}", daemon=True)
+    t.start()
+    return stop_event
+
+
+def _auto_recover_interrupted():
+    """If an earlier session was interrupted abruptly before closing,
+    recover any acquired credentials for the last active profile.
+    """
+    try:
+        if LAST_ACTIVE_FILE.exists():
+            last_p = LAST_ACTIVE_FILE.read_text(encoding="utf-8").strip()
+            if last_p:
+                p_dir = PROFILES_DIR / last_p
+                if p_dir.exists():
+                    _sync_profile_now(last_p, p_dir)
+            clear_last_active()
+    except Exception:
+        pass
+
+
 def inside_agy_session():
     """True if we're running inside an existing agy sandbox."""
     return ".agy_accounts" in os.environ.get("HOME", "")
@@ -957,23 +1030,38 @@ def launch_isolated(profile, args):
     _preseed_agy_slots(profile_dir)
 
     extra = " ".join(f"'{a}'" for a in args) if args else ""
+
+    # Start background autosync watcher — saves tokens within 2s of browser OAuth
+    stop_sync = _start_autosync_watcher(profile, profile_dir)
+
+    def _sig_handler(signum, frame):
+        try:
+            stop_sync.set()
+            _sync_profile_now(profile, profile_dir)
+            clear_last_active()
+        except Exception:
+            pass
+        sys.exit(128 + signum)
+
+    old_handlers = {}
+    for sig in [getattr(signal, s) for s in ("SIGHUP", "SIGTERM", "SIGINT") if hasattr(signal, s)]:
+        try:
+            old_handlers[sig] = signal.signal(sig, _sig_handler)
+        except Exception:
+            pass
+
     try:
         # subprocess.call (not os.execvpe) — this process survives to save tokens.
         _bash_run(env, f"'{agy_bin}' {extra}".strip())
     finally:
-        # Capture token from system keyring and save to profile
-        try:
-            current_keyring_tok = KeyringManager.get_token()
-            if current_keyring_tok:
-                keyring_file.write_text(current_keyring_tok, encoding="utf-8")
-                extracted = KeyringManager.extract_email(current_keyring_tok)
-                if extracted:
-                    _save_meta(profile, email=extracted)
-        except Exception:
-            pass
+        stop_sync.set()
+        for sig, h in old_handlers.items():
+            try:
+                signal.signal(sig, h)
+            except Exception:
+                pass
 
-        # Save tokens from real home → profile (captures agy's Path.home() writes)
-        save_back_profile(profile_dir)
+        _sync_profile_now(profile, profile_dir)
         clear_last_active()
         # Also harvest tokens written relative to the $HOME override
         _harvest_newest_token(profile_dir, session_start_ts)
@@ -1028,20 +1116,37 @@ def launch_unified(profile, args):
     print(f"{C_GREEN}Auth tokens swapped. Launching...{C_RESET}\n")
 
     extra = " ".join(f"'{a}'" for a in args) if args else ""
-    try:
-        _bash_run(os.environ.copy(), f"'{agy_bin}' {extra}".strip())
-    finally:
+
+    # Start background autosync watcher
+    stop_sync = _start_autosync_watcher(profile, profile_dir)
+
+    def _sig_handler_uni(signum, frame):
         try:
-            current_keyring_tok = KeyringManager.get_token()
-            if current_keyring_tok:
-                keyring_file.write_text(current_keyring_tok, encoding="utf-8")
-                extracted = KeyringManager.extract_email(current_keyring_tok)
-                if extracted:
-                    _save_meta(profile, email=extracted)
+            stop_sync.set()
+            _sync_profile_now(profile, profile_dir)
+            clear_last_active()
+        except Exception:
+            pass
+        sys.exit(128 + signum)
+
+    old_handlers = {}
+    for sig in [getattr(signal, s) for s in ("SIGHUP", "SIGTERM", "SIGINT") if hasattr(signal, s)]:
+        try:
+            old_handlers[sig] = signal.signal(sig, _sig_handler_uni)
         except Exception:
             pass
 
-        save_back_profile(profile_dir)
+    try:
+        _bash_run(os.environ.copy(), f"'{agy_bin}' {extra}".strip())
+    finally:
+        stop_sync.set()
+        for sig, h in old_handlers.items():
+            try:
+                signal.signal(sig, h)
+            except Exception:
+                pass
+
+        _sync_profile_now(profile, profile_dir)
         clear_last_active()
         _persist_profile_email(profile)
 
@@ -1646,6 +1751,7 @@ def _goodbye():
 
 
 def main():
+    _auto_recover_interrupted()
     argv = sys.argv[1:]
 
     if argv and argv[0] in ("--version", "-v"):
