@@ -49,7 +49,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -292,10 +292,111 @@ class KeyringManager:
                     payload = json.loads(base64.urlsafe_b64decode(p))
                     email = payload.get("email")
                     if email and "@" in email:
-                        return email
+                        return email.strip().lower()
         except Exception:
             pass
         return None
+
+    @classmethod
+    def extract_refresh_token(cls, token_str):
+        """Extract refresh_token from the stored JSON token."""
+        if not token_str:
+            return None
+        try:
+            data = json.loads(token_str)
+            return data.get("token", {}).get("refresh_token")
+        except Exception:
+            return None
+
+
+def safe_merge_token(new_tok_str, existing_tok_str=None, bound_email=None):
+    """Safely merges new OAuth token with existing token:
+    1. If bound_email is provided, strictly rejects tokens belonging to different Google accounts.
+    2. Preserves refresh_token from existing token if new token lacks it (preventing 4-5 day expiry).
+    3. Preserves id_token from existing token if new token lacks it.
+    4. Preserves auth_method from existing token if new token lacks it.
+    Returns: (merged_tok_str, email_to_record, status_msg)
+    """
+    if not new_tok_str:
+        return None, None, "empty_token"
+
+    try:
+        new_data = json.loads(new_tok_str)
+    except Exception:
+        return None, None, "invalid_json"
+
+    if not isinstance(new_data, dict):
+        return None, None, "not_a_dict"
+
+    new_email = KeyringManager.extract_email(new_tok_str)
+
+    # Enforce account ownership: A profile bound to an account MUST NEVER accept another account's token!
+    if bound_email:
+        bound_norm = bound_email.strip().lower()
+        if new_email and new_email.strip().lower() != bound_norm:
+            return None, None, f"mismatch: token is for {new_email}, profile is bound to {bound_email}"
+
+    existing_data = {}
+    if existing_tok_str:
+        try:
+            existing_data = json.loads(existing_tok_str)
+            if not isinstance(existing_data, dict):
+                existing_data = {}
+        except Exception:
+            existing_data = {}
+
+    # Merge token object (access_token, refresh_token, expiry, token_type)
+    new_tok_obj = new_data.get("token")
+    if not isinstance(new_tok_obj, dict):
+        new_tok_obj = {}
+
+    existing_tok_obj = existing_data.get("token")
+    if not isinstance(existing_tok_obj, dict):
+        existing_tok_obj = {}
+
+    # Critical: Google OAuth refresh calls often do NOT return a new refresh_token.
+    # We MUST preserve the existing refresh_token so the account never expires!
+    if not new_tok_obj.get("refresh_token") and existing_tok_obj.get("refresh_token"):
+        new_tok_obj["refresh_token"] = existing_tok_obj["refresh_token"]
+
+    new_data["token"] = new_tok_obj
+
+    # Preserve id_token (which contains the email JWT) if new token doesn't include one
+    if not new_data.get("id_token") and existing_data.get("id_token"):
+        new_data["id_token"] = existing_data["id_token"]
+
+    # Preserve auth_method
+    if not new_data.get("auth_method") and existing_data.get("auth_method"):
+        new_data["auth_method"] = existing_data["auth_method"]
+
+    final_email = new_email or bound_email
+    if not final_email:
+        final_email = KeyringManager.extract_email(json.dumps(new_data))
+
+    return json.dumps(new_data), final_email, "ok"
+
+
+def _backup_profile_token(profile_dir):
+    """Keep a redundant backup of keyring_token.json so it can never be lost."""
+    src = profile_dir / KEYRING_TOKEN_FILE
+    if src.exists() and src.stat().st_size > 10:
+        try:
+            shutil.copy2(src, profile_dir / (KEYRING_TOKEN_FILE + ".bak"))
+        except Exception:
+            pass
+
+
+def _restore_token_from_backup(profile_dir):
+    """Restore keyring_token.json from backup if missing or empty."""
+    target = profile_dir / KEYRING_TOKEN_FILE
+    bak = profile_dir / (KEYRING_TOKEN_FILE + ".bak")
+    if (not target.exists() or target.stat().st_size < 10) and bak.exists() and bak.stat().st_size > 10:
+        try:
+            shutil.copy2(bak, target)
+            return True
+        except Exception:
+            pass
+    return False
 
 
 # ── Flicker-free terminal buffer ───────────────────────────────────────────────
@@ -438,21 +539,16 @@ def get_profile_email(profile_name):
     """Return the authenticated email for a profile, or None.
 
     Priority:
-      1. Persistent metadata (.meta/<name>.json) — fastest.
-      2. Profile's keyring_token.json (parses real Google id_token JWT).
-      3. Top-level cli.log at profile_dir/.gemini/antigravity-cli/cli.log.
-      4. cli.log inside .agy_accounts/<slot>/ sub-sandboxes (newest slot first).
+      1. Profile's saved keyring_token.json (parses real Google id_token JWT - cryptographic ground truth).
+      2. Persistent metadata (.meta/<name>.json).
+      3. Backup token file (keyring_token.json.bak).
+      4. Profile's local cli.log.
     """
-    # 1. Metadata (persisted after every session)
-    meta = _load_meta(profile_name)
-    if meta.get("email"):
-        return meta["email"]
-
     profile_dir = PROFILES_DIR / profile_name
 
-    # 2. Extract directly from profile's saved keyring token
+    # 1. Direct from profile's saved keyring token (cryptographic ground truth)
     token_file = profile_dir / KEYRING_TOKEN_FILE
-    if token_file.exists():
+    if token_file.exists() and token_file.stat().st_size > 10:
         try:
             email = KeyringManager.extract_email(token_file.read_text(encoding="utf-8"))
             if email:
@@ -461,105 +557,100 @@ def get_profile_email(profile_name):
         except Exception:
             pass
 
-    # 3. Top-level log (unified mode / some agy versions write here directly)
+    # 2. Metadata (persisted after session)
+    meta = _load_meta(profile_name)
+    if meta.get("email"):
+        return meta["email"]
+
+    # 3. Check backup token file
+    bak_file = profile_dir / (KEYRING_TOKEN_FILE + ".bak")
+    if bak_file.exists() and bak_file.stat().st_size > 10:
+        try:
+            email = KeyringManager.extract_email(bak_file.read_text(encoding="utf-8"))
+            if email:
+                _save_meta(profile_name, email=email)
+                return email
+        except Exception:
+            pass
+
+    # 4. Profile's own local cli.log (NOT shared REAL_HOME)
+    email = _search_email_in_log(
+        profile_dir / ".gemini" / "antigravity-cli" / "cli.log"
+    )
+    if email:
+        _save_meta(profile_name, email=email)
+        return email
+
+    return None
+
+
+def _scan_logs_for_email(profile_name, session_start_ts=None):
+    """Scan log locations directly, strictly scoped to this profile's session.
+    NEVER reads older logs from other profiles or unrelated sessions.
+    """
+    profile_dir = PROFILES_DIR / profile_name
+
+    # Check profile-dir top-level log (isolated mode)
     email = _search_email_in_log(
         profile_dir / ".gemini" / "antigravity-cli" / "cli.log"
     )
     if email:
         return email
 
-    # 3. Inside .agy_accounts/<slot>/ — search newest slot first
-    agy_inner = profile_dir / ".agy_accounts"
-    if agy_inner.exists():
-        try:
-            slots = sorted(
-                (s for s in agy_inner.iterdir() if s.is_dir()),
-                key=lambda s: s.stat().st_mtime,
-                reverse=True,
-            )
-            for slot in slots:
-                email = _search_email_in_log(
-                    slot / ".gemini" / "antigravity-cli" / "cli.log"
-                )
-                if email:
-                    return email
-        except Exception:
-            pass
-
-    return None
-
-
-def _scan_logs_for_email(profile_name):
-    """Scan all log locations directly — bypasses the metadata cache.
-
-    Used after a session to detect the CURRENT authenticated email, which
-    may differ from a previously cached value (e.g. after switching accounts).
-    Also checks the real HOME's cli.log because isolated mode now pre-swaps
-    tokens into ~/.gemini/ before launch.
-    """
-    profile_dir = PROFILES_DIR / profile_name
-
-    # Check all recent log files in real home (newest first)
-    log_dir = REAL_HOME / ".gemini" / "antigravity-cli" / "log"
-    if log_dir.exists():
+    # Check profile-dir log sub-folder (isolated mode)
+    prof_log_dir = profile_dir / ".gemini" / "antigravity-cli" / "log"
+    if prof_log_dir.exists():
         try:
             logs = sorted(
-                (f for f in log_dir.iterdir() if f.name.endswith(".log")),
+                (f for f in prof_log_dir.iterdir() if f.name.endswith(".log")),
                 key=lambda f: f.stat().st_mtime,
                 reverse=True,
             )
-            for log_file in logs[:5]:
+            for log_file in logs:
+                if session_start_ts and log_file.stat().st_mtime < session_start_ts:
+                    continue
                 email = _search_email_in_log(log_file)
                 if email:
                     return email
         except Exception:
             pass
 
-    # Check real home cli.log directly
-    email = _search_email_in_log(
-        REAL_HOME / ".gemini" / "antigravity-cli" / "cli.log"
-    )
-    if email:
-        return email
-
-    # Check profile-dir top-level log (agy versions that respect $HOME)
-    email = _search_email_in_log(
-        profile_dir / ".gemini" / "antigravity-cli" / "cli.log"
-    )
-    if email:
-        return email
-
-    # Check .agy_accounts/<slot>/ sub-sandboxes (newest slot first)
-    agy_inner = profile_dir / ".agy_accounts"
-    if agy_inner.exists():
-        try:
-            slots = sorted(
-                (s for s in agy_inner.iterdir() if s.is_dir()),
-                key=lambda s: s.stat().st_mtime,
-                reverse=True,
-            )
-            for slot in slots:
-                email = _search_email_in_log(
-                    slot / ".gemini" / "antigravity-cli" / "cli.log"
+    # Only in unified mode (where logs write to REAL_HOME), check REAL_HOME logs
+    # BUT ONLY files created/modified AFTER session_start_ts!
+    if session_start_ts:
+        log_dir = REAL_HOME / ".gemini" / "antigravity-cli" / "log"
+        if log_dir.exists():
+            try:
+                logs = sorted(
+                    (f for f in log_dir.iterdir() if f.name.endswith(".log")),
+                    key=lambda f: f.stat().st_mtime,
+                    reverse=True,
                 )
-                if email:
-                    return email
-        except Exception:
-            pass
+                for log_file in logs[:5]:
+                    if log_file.stat().st_mtime >= session_start_ts:
+                        email = _search_email_in_log(log_file)
+                        if email:
+                            return email
+            except Exception:
+                pass
 
     return None
 
 
-def _persist_profile_email(profile_name):
-    """After a session, scan logs fresh (never use cached metadata) and persist.
-
-    Scanning fresh ensures we always capture the CURRENT account — important
-    when the user switches to a different Google account in a new session.
+def _persist_profile_email(profile_name, session_start_ts=None):
+    """After a session, persist profile email and last_used timestamp.
+    Guarantees: An existing bound email is NEVER overwritten by an unverified log scan.
     """
-    email = _scan_logs_for_email(profile_name)
+    existing_email = get_profile_email(profile_name)
     updates = {"last_used": datetime.now().isoformat()}
-    if email:
-        updates["email"] = email
+
+    if existing_email:
+        updates["email"] = existing_email
+    else:
+        email = _scan_logs_for_email(profile_name, session_start_ts)
+        if email:
+            updates["email"] = email
+
     _save_meta(profile_name, **updates)
 
 
@@ -593,76 +684,20 @@ def _preseed_agy_slots(profile_dir):
 
 def _is_fresh_profile(profile_dir):
     """Return True if this profile has never been authenticated yet."""
-    if (profile_dir / KEYRING_TOKEN_FILE).exists():
+    _restore_token_from_backup(profile_dir)
+    tok = profile_dir / KEYRING_TOKEN_FILE
+    if tok.exists() and tok.stat().st_size > 10:
         return False
     if (profile_dir / ".auth_saved").exists():
-        return False
-    if (profile_dir / ".gemini" / "config" / "config.json").exists():
-        return False
-    if (profile_dir / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt").exists():
         return False
     return not any((profile_dir / rel).exists() for rel in _TOKEN_RELPATHS)
 
 
 def _deep_clear_real_home_auth():
-    """Aggressively clear ALL credential-related files from the real ~/.gemini/
-    AND clear the system keyring before launching a fresh profile.
-
-    This ensures agy cannot find any existing authentication state and is
-    forced to trigger a clean OAuth flow.
+    """Clear system keyring before launching a fresh profile.
+    Forces clean OAuth flow without touching or wiping user data from REAL_HOME.
     """
-    # 1. Clear system keyring item
     KeyringManager.delete_token()
-
-    # 2. Clear known file tokens
-    for rel in _TOKEN_RELPATHS:
-        p = REAL_HOME / rel
-        if p.exists():
-            try:
-                shutil.copy2(p, p.with_suffix(".agyp-backup"))
-                p.unlink()
-            except Exception:
-                pass
-
-    # 3. Clear jetski state file
-    js = REAL_HOME / ".gemini" / "antigravity-cli" / "jetski_state.pbtxt"
-    if js.exists():
-        try:
-            shutil.copy2(js, js.with_suffix(".agyp-backup"))
-            js.unlink()
-        except Exception:
-            pass
-
-    # 4. Clear cache
-    cache_dir = REAL_HOME / ".gemini" / "antigravity-cli" / "cache"
-    if cache_dir.exists():
-        try:
-            shutil.rmtree(cache_dir, ignore_errors=True)
-        except Exception:
-            pass
-
-    # 5. Clear config.json
-    cfg = REAL_HOME / ".gemini" / "config" / "config.json"
-    if cfg.exists():
-        try:
-            shutil.copy2(cfg, cfg.with_suffix(".agyp-backup"))
-            cfg.unlink()
-        except Exception:
-            pass
-
-    # Broader sweep: any other .json files inside ~/.gemini/antigravity-cli/
-    cli_dir = REAL_HOME / ".gemini" / "antigravity-cli"
-    if cli_dir.exists():
-        try:
-            for f in cli_dir.iterdir():
-                if f.suffix == ".json" and "agyp-backup" not in f.name:
-                    try:
-                        shutil.copy2(f, f.with_name(f.stem + ".agyp-backup"))
-                        f.unlink()
-                    except Exception:
-                        pass
-        except Exception:
-            pass
 
 
 def _get_private_browser_cmd():
@@ -899,7 +934,8 @@ def save_back_profile(profile_dir):
 def set_last_active(profile_name):
     try:
         PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-        LAST_ACTIVE_FILE.write_text(profile_name, encoding="utf-8")
+        data = {"profile": profile_name, "pid": os.getpid(), "time": time.time()}
+        LAST_ACTIVE_FILE.write_text(json.dumps(data), encoding="utf-8")
     except OSError:
         pass
 
@@ -912,55 +948,70 @@ def clear_last_active():
         pass
 
 
-def _sync_profile_now(profile_name, profile_dir):
-    """Safely and immediately syncs live tokens and config into profile_dir.
-
-    Called during active sessions by the background watchdog thread and signal
-    handlers so that credentials are saved within seconds of Google OAuth
-    completion, without having to wait for the user to exit agy.
+def _sync_profile_now(profile_name, profile_dir, session_start_ts=None):
+    """Safely and immediately syncs live tokens into profile_dir.
+    Guarantees:
+      - Never overwrites a profile with a token from a different Google account.
+      - Never loses refresh_token or id_token (prevents token expiry).
+      - Automatically maintains backup token copy (.bak).
     """
     try:
         profile_dir.mkdir(parents=True, exist_ok=True)
         keyring_file = profile_dir / KEYRING_TOKEN_FILE
 
-        # 1. Capture token from system keyring and save to profile
-        tok = KeyringManager.get_token()
-        if tok:
-            prev = None
-            if keyring_file.exists():
+        meta = _load_meta(profile_name)
+        bound_email = meta.get("email")
+
+        existing_tok = None
+        if keyring_file.exists() and keyring_file.stat().st_size > 10:
+            try:
+                existing_tok = keyring_file.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+        if not existing_tok:
+            bak = profile_dir / (KEYRING_TOKEN_FILE + ".bak")
+            if bak.exists() and bak.stat().st_size > 10:
                 try:
-                    prev = keyring_file.read_text(encoding="utf-8").strip()
+                    existing_tok = bak.read_text(encoding="utf-8").strip()
                 except Exception:
                     pass
-            if tok != prev:
-                keyring_file.write_text(tok, encoding="utf-8")
 
-            # Extract email from JWT id_token
-            extracted = KeyringManager.extract_email(tok)
-            if extracted:
-                _save_meta(profile_name, email=extracted, last_used=datetime.now().isoformat())
+        if not bound_email and existing_tok:
+            bound_email = KeyringManager.extract_email(existing_tok)
 
-        # 2. Mirror full .gemini directory state (jetski_state, settings, config)
-        save_back_profile(profile_dir)
+        # 1. Capture token from system keyring and safely validate/merge
+        tok = KeyringManager.get_token()
+        if tok:
+            merged_tok, email, status = safe_merge_token(tok, existing_tok, bound_email)
+            if merged_tok:
+                if merged_tok != existing_tok:
+                    keyring_file.write_text(merged_tok, encoding="utf-8")
+                    _backup_profile_token(profile_dir)
 
-        # 3. If email still not in metadata, scan logs
+                if email:
+                    _save_meta(profile_name, email=email, last_used=datetime.now().isoformat())
+                    (profile_dir / ".auth_saved").touch()
+            # If status == mismatch (token belongs to another Google account),
+            # DO NOT TOUCH THIS PROFILE!
+
+        # 2. If email still not in metadata, scan logs scoped to this session
         meta = _load_meta(profile_name)
         if not meta.get("email"):
-            _persist_profile_email(profile_name)
+            _persist_profile_email(profile_name, session_start_ts)
     except Exception:
         pass
 
 
-def _start_autosync_watcher(profile_name, profile_dir):
+def _start_autosync_watcher(profile_name, profile_dir, session_start_ts=None):
     """Start a background daemon thread that polls for newly acquired credentials
-    every 2 seconds and persists them immediately into profile_dir.
+    and persists them immediately into profile_dir with strict account validation.
     """
     stop_event = threading.Event()
 
     def _watcher_loop():
         while not stop_event.is_set():
-            _sync_profile_now(profile_name, profile_dir)
-            stop_event.wait(2.0)
+            _sync_profile_now(profile_name, profile_dir, session_start_ts)
+            stop_event.wait(3.0)
 
     t = threading.Thread(target=_watcher_loop, name=f"agyp-sync-{profile_name}", daemon=True)
     t.start()
@@ -970,15 +1021,36 @@ def _start_autosync_watcher(profile_name, profile_dir):
 def _auto_recover_interrupted():
     """If an earlier session was interrupted abruptly before closing,
     recover any acquired credentials for the last active profile.
+    Only runs if that process is dead.
     """
     try:
         if LAST_ACTIVE_FILE.exists():
-            last_p = LAST_ACTIVE_FILE.read_text(encoding="utf-8").strip()
-            if last_p:
+            content = LAST_ACTIVE_FILE.read_text(encoding="utf-8").strip()
+            last_p = None
+            pid = None
+            if content.startswith("{"):
+                try:
+                    d = json.loads(content)
+                    last_p = d.get("profile")
+                    pid = d.get("pid")
+                except Exception:
+                    pass
+            else:
+                last_p = content
+
+            is_running = False
+            if pid:
+                try:
+                    os.kill(pid, 0)
+                    is_running = True
+                except (OSError, ProcessLookupError):
+                    is_running = False
+
+            if not is_running and last_p:
                 p_dir = PROFILES_DIR / last_p
                 if p_dir.exists():
                     _sync_profile_now(last_p, p_dir)
-            clear_last_active()
+                clear_last_active()
     except Exception:
         pass
 
@@ -1034,30 +1106,14 @@ def _bash_run(env, cmd_str):
 
 
 def launch_isolated(profile, args):
-    """Launch agy with isolated HOME + token swap into the real ~/.gemini/.
+    """Launch agy with 100% isolated HOME + per-profile token and workspace isolation.
 
-    ROOT-CAUSE FIX (v1.4.1):
-      agy may resolve its config dir via Path.home() / pwd.getpwuid() rather
-      than the $HOME env var.  When it does, it always reads from the REAL
-      system home — meaning the HOME override alone does not isolate tokens.
-      Both profiles end up using the same ~/.gemini/antigravity-cli/ token,
-      so the same Google account appears in every profile.
-
-    Two-layer isolation strategy:
-      1. Token swap (NEW): the profile's saved tokens are copied into the real
-         ~/.gemini/ BEFORE launch, exactly as unified mode does.  This ensures
-         agy starts authenticated as the correct account regardless of which
-         path it uses to locate its config.
-      2. HOME override (kept): HOME=profile_dir gives each profile its own
-         workspace, history, and any files agy writes relative to $HOME.
-      3. _preseed_agy_slots(): also copies tokens into existing .agy_accounts/
-         sub-sandbox slots for agy versions that create inner sessions.
-
-    After the session:
-      • save_back_profile() — saves tokens from ~/.gemini/ (real home) back
-        into the profile, capturing what agy updated via Path.home().
-      • _harvest_newest_token() — also captures tokens written relative to
-        the $HOME override (profile_dir) for good measure.
+    In isolated mode:
+      • HOME=profile_dir gives each profile its own completely separate workspace,
+        conversations, history, brain, SQLite database, and configs.
+      • No files are leaked to or from the system REAL_HOME.
+      • Keyring token is swapped cleanly before launch and restored on exit.
+      • Token merging strictly enforces account ownership and preserves refresh tokens.
     """
     agy_bin = _resolve_agy()
     if not agy_bin:
@@ -1067,6 +1123,7 @@ def launch_isolated(profile, args):
     profile_dir = PROFILES_DIR / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
     _migrate_old_tokens(profile_dir)
+    _restore_token_from_backup(profile_dir)
 
     # Initialise metadata on first use of this profile
     if not _load_meta(profile).get("created_at"):
@@ -1076,17 +1133,13 @@ def launch_isolated(profile, args):
     p_email = get_profile_email(profile)
     email_tag = f"  [{C_CYAN}{p_email}{C_BLUE}]" if p_email else f"  [{C_YELLOW}login required{C_BLUE}]"
 
-    print(f"\n{C_BLUE}Switching to profile '{C_WHITE}{profile}{C_BLUE}'{email_tag}  [{C_YELLOW}isolated{C_BLUE}]{C_RESET}")
+    print(f"\n{C_BLUE}Switching to profile '{C_WHITE}{profile}{C_BLUE}'{email_tag}  [{C_GREEN}isolated{C_BLUE}]{C_RESET}")
     print(f"{C_GREEN}Launching isolated environment...{C_RESET}")
 
     private_browser = None
     if fresh:
-        # Detect an incognito/private browser to force a clean Google sign-in.
-        # Setting BROWSER in the env means agy's OAuth opens in a private window
-        # where NO Google account is pre-logged-in — user chooses freely.
         private_browser = _get_private_browser_cmd()
         _warn_browser_account_switch(profile, private_browser)
-        # Clear ALL real-home credentials so agy cannot reuse a cached account.
         _deep_clear_real_home_auth()
     else:
         print()
@@ -1094,10 +1147,8 @@ def launch_isolated(profile, args):
     session_start_ts = time.time()
 
     # ── Layer 0: Swap system keyring token (SecretService / Keychain) ───────────
-    # agy reads/writes its primary OAuth token from the system keyring.
-    # We must load this profile's token into the keyring, or clear it if fresh!
     keyring_file = profile_dir / KEYRING_TOKEN_FILE
-    if keyring_file.exists():
+    if keyring_file.exists() and keyring_file.stat().st_size > 10:
         try:
             tok = keyring_file.read_text(encoding="utf-8").strip()
             if tok:
@@ -1105,38 +1156,34 @@ def launch_isolated(profile, args):
         except Exception:
             pass
     else:
-        # Fresh or reset profile: CLEAR the keyring so agy is forced to prompt for login!
         KeyringManager.delete_token()
 
-    # ── Layer 1: Swap profile tokens into the REAL home ────────────────────────
-    swap_in_profile(profile_dir)
     set_last_active(profile)
 
-    # ── Layer 2: Override $HOME for workspace isolation ────────────────────────
+    # ── Layer 1: Override HOME and XDG for complete workspace isolation ─────────
+    # Keeping HOME=profile_dir guarantees that agy writes all history, chats,
+    # and settings inside profile_dir/.gemini/ without polluting REAL_HOME.
     env = os.environ.copy()
     env["HOME"] = str(profile_dir)
-    for xdg in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]:
-        env.pop(xdg, None)
+    env["XDG_CONFIG_HOME"] = str(profile_dir / ".config")
+    env["XDG_DATA_HOME"]   = str(profile_dir / ".local" / "share")
+    env["XDG_CACHE_HOME"]  = str(profile_dir / ".cache")
+    env["XDG_STATE_HOME"]  = str(profile_dir / ".local" / "state")
 
-    # ── Layer 3: For fresh profiles, force private/incognito browser ───────────
-    # This is the key fix: agy's OAuth opens in a clean browser session with
-    # no pre-logged-in Google account, so the user MUST choose which account
-    # to sign in with — no silent auto-selection of the "wrong" account.
     if private_browser:
         env["BROWSER"] = private_browser
 
-    # ── Layer 4: Pre-seed any existing .agy_accounts/ slots ───────────────────
     _preseed_agy_slots(profile_dir)
 
     extra = " ".join(f"'{a}'" for a in args) if args else ""
 
-    # Start background autosync watcher — saves tokens within 2s of browser OAuth
-    stop_sync = _start_autosync_watcher(profile, profile_dir)
+    # Start background autosync watcher with account safety
+    stop_sync = _start_autosync_watcher(profile, profile_dir, session_start_ts)
 
     def _sig_handler(signum, frame):
         try:
             stop_sync.set()
-            _sync_profile_now(profile, profile_dir)
+            _sync_profile_now(profile, profile_dir, session_start_ts)
             clear_last_active()
         except Exception:
             pass
@@ -1150,7 +1197,6 @@ def launch_isolated(profile, args):
             pass
 
     try:
-        # subprocess.call (not os.execvpe) — this process survives to save tokens.
         _bash_run(env, f"'{agy_bin}' {extra}".strip())
     finally:
         stop_sync.set()
@@ -1160,19 +1206,14 @@ def launch_isolated(profile, args):
             except Exception:
                 pass
 
-        _sync_profile_now(profile, profile_dir)
+        _sync_profile_now(profile, profile_dir, session_start_ts)
         clear_last_active()
-        # Also harvest tokens written relative to the $HOME override
         _harvest_newest_token(profile_dir, session_start_ts)
-        # Persist email + timestamp; warn if same email found in another profile
-        _persist_profile_email(profile)
+        _persist_profile_email(profile, session_start_ts)
         detected_email = get_profile_email(profile)
         _warn_duplicate_email(profile, detected_email)
 
     sys.exit(0)
-
-
-
 
 
 def launch_unified(profile, args):
@@ -1185,6 +1226,7 @@ def launch_unified(profile, args):
     profile_dir = PROFILES_DIR / profile
     profile_dir.mkdir(parents=True, exist_ok=True)
     _migrate_old_tokens(profile_dir)
+    _restore_token_from_backup(profile_dir)
 
     # Initialise metadata on first use of this profile
     if not _load_meta(profile).get("created_at"):
@@ -1198,9 +1240,11 @@ def launch_unified(profile, args):
     email_tag = f"  [{C_CYAN}{p_email}{C_BLUE}]" if p_email else f"  [{C_YELLOW}login required{C_BLUE}]"
     print(f"\n{C_BLUE}Switching to profile '{C_WHITE}{profile}{C_BLUE}'{email_tag}  [{C_YELLOW}unified{C_BLUE}]{C_RESET}")
 
+    session_start_ts = time.time()
+
     # Swap system keyring token
     keyring_file = profile_dir / KEYRING_TOKEN_FILE
-    if keyring_file.exists():
+    if keyring_file.exists() and keyring_file.stat().st_size > 10:
         try:
             tok = keyring_file.read_text(encoding="utf-8").strip()
             if tok:
@@ -1216,13 +1260,14 @@ def launch_unified(profile, args):
 
     extra = " ".join(f"'{a}'" for a in args) if args else ""
 
-    # Start background autosync watcher
-    stop_sync = _start_autosync_watcher(profile, profile_dir)
+    # Start background autosync watcher with session scoping
+    stop_sync = _start_autosync_watcher(profile, profile_dir, session_start_ts)
 
     def _sig_handler_uni(signum, frame):
         try:
             stop_sync.set()
-            _sync_profile_now(profile, profile_dir)
+            _sync_profile_now(profile, profile_dir, session_start_ts)
+            save_back_profile(profile_dir)
             clear_last_active()
         except Exception:
             pass
@@ -1245,9 +1290,10 @@ def launch_unified(profile, args):
             except Exception:
                 pass
 
-        _sync_profile_now(profile, profile_dir)
+        _sync_profile_now(profile, profile_dir, session_start_ts)
+        save_back_profile(profile_dir)
         clear_last_active()
-        _persist_profile_email(profile)
+        _persist_profile_email(profile, session_start_ts)
 
     sys.exit(0)
 
@@ -1360,10 +1406,10 @@ def show_community():
 def ask_mode():
     """Ask isolated vs unified. Returns 'isolated', 'unified', or 'EXIT'."""
     options = [
-        ("isolated", "Isolated", "[Each profile is fully separated]"),
-        ("unified",  "Unified",  "[Shared history, token-only swap]"),
-        ("join_us",  "",         ""),
-        ("exit",     "",         ""),
+        ("isolated", "Isolated (Recommended)", "[Each profile 100% separate - clean history & tokens]"),
+        ("unified",  "Unified",                "[Shared history in ~/.gemini, token-only swap]"),
+        ("join_us",  "",                       ""),
+        ("exit",     "",                       ""),
     ]
     idx = 0
     while True:
@@ -1457,7 +1503,9 @@ def interactive_menu(profiles, launch_mode="isolated"):
                 if i < len(profiles) and mode in ("main", "delete", "rename"):
                     email = get_profile_email(opt)
                     if email:
-                        suffix = f"  {C_CYAN}[{email}]{C_RESET}"
+                        is_dupe = any(p != opt and get_profile_email(p) == email for p in profiles)
+                        dupe_tag = f" {C_YELLOW}(duplicate){C_RESET}" if is_dupe else ""
+                        suffix = f"  {C_CYAN}[{email}]{C_RESET}{dupe_tag}"
                     else:
                         suffix = f"  {C_YELLOW}[no account — login on launch]{C_RESET}"
                 if i == current_idx:
@@ -1611,7 +1659,9 @@ def _cmd_list():
         created   = meta.get("created_at", "")
 
         if email:
-            email_part = f"  {C_CYAN}[{email}]{C_RESET}"
+            is_dupe = any(other != p and get_profile_email(other) == email for other in profiles)
+            dupe_tag = f" {C_YELLOW}(duplicate){C_RESET}" if is_dupe else ""
+            email_part = f"  {C_CYAN}[{email}]{C_RESET}{dupe_tag}"
         else:
             email_part = f"  {C_YELLOW}[no account — login on launch]{C_RESET}"
         date_part  = (
@@ -1650,7 +1700,11 @@ def _cmd_info(profile_name):
         size_str = "—"
 
     # Auth token status
-    has_token = (target / KEYRING_TOKEN_FILE).exists() or any((target / rel).exists() for rel in _TOKEN_RELPATHS)
+    has_token = (
+        (target / KEYRING_TOKEN_FILE).exists()
+        or (target / (KEYRING_TOKEN_FILE + ".bak")).exists()
+        or any((target / rel).exists() for rel in _TOKEN_RELPATHS)
+    )
     token_str = (
         f"{C_GREEN}saved{C_RESET}"
         if has_token
@@ -1738,7 +1792,12 @@ def _cmd_duplicate(src_name, dst_name):
 
     # Strip auth tokens from the clone — force a fresh login on first launch
     stripped = 0
-    for f in [dst_dir / KEYRING_TOKEN_FILE, dst_dir / ".auth_saved"]:
+    for f in [
+        dst_dir / KEYRING_TOKEN_FILE,
+        dst_dir / (KEYRING_TOKEN_FILE + ".bak"),
+        dst_dir / (KEYRING_TOKEN_FILE + ".bak2"),
+        dst_dir / ".auth_saved",
+    ]:
         if f.exists():
             f.unlink()
             stripped += 1
@@ -1794,8 +1853,13 @@ def _cmd_reset_auth(profile_name):
     old_email = get_profile_email(name) or "none"
     cleared = 0
 
-    # Remove keyring token file and auth_saved marker
-    for f in [target / KEYRING_TOKEN_FILE, target / ".auth_saved"]:
+    # Remove keyring token file, backups, and auth_saved marker
+    for f in [
+        target / KEYRING_TOKEN_FILE,
+        target / (KEYRING_TOKEN_FILE + ".bak"),
+        target / (KEYRING_TOKEN_FILE + ".bak2"),
+        target / ".auth_saved",
+    ]:
         if f.exists():
             f.unlink()
             cleared += 1
