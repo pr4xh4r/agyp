@@ -55,7 +55,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -1838,13 +1838,6 @@ def get_key():
             return "ctrl_c"
         if ch in (b"\x7f", b"\x08"):
             return "backspace"
-        if ch in (b"k", b"K"):
-            return "up"
-        if ch in (b"j", b"J"):
-            return "down"
-        if ch in (b"q", b"Q"):
-            return "q"
-
         return "other"
     finally:
         if must_restore and saved is not None:
@@ -1926,7 +1919,7 @@ def show_community():
                 webbrowser.open(url)
             else:
                 return
-        elif key in ('ctrl_c', 'escape', 'backspace', 'q'):
+        elif key in ('ctrl_c', 'escape', 'backspace'):
             return
 
 
@@ -1975,7 +1968,7 @@ def ask_mode():
                 show_community()
             else:
                 return lbl
-        elif key in ('ctrl_c', 'escape', 'q'):
+        elif key in ('ctrl_c', 'escape'):
             return "EXIT"
 
 
@@ -2064,11 +2057,12 @@ def interactive_menu(profiles, launch_mode="isolated"):
             current_idx = (current_idx - 1) % len(options)
         elif key == 'down':
             current_idx = (current_idx + 1) % len(options)
-        elif key in ('ctrl_c', 'q', 'escape'):
-            if mode == "main":
-                return "EXIT"
-            mode = "main"
-            current_idx = 0
+        elif key == 'ctrl_c':
+            return "EXIT"
+        elif key == 'escape':
+            if mode != "main":
+                mode = "main"
+                current_idx = 0
         elif key == 'enter':
             if mode == "main":
                 n = len(profiles)
@@ -2145,7 +2139,7 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     try:
                         clear_screen()
                         draw_header()
-                        ans = input(
+                        ans = prompt_input(
                             f" {C_RED}Permanently delete '{p_del}'? (y/N):{C_RESET} "
                         ).strip().lower()
                     except (EOFError, KeyboardInterrupt):
