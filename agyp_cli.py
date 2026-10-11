@@ -14,6 +14,7 @@ import tty
 import json
 import time
 import base64
+import select
 import shutil
 import atexit
 import termios
@@ -54,7 +55,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -445,9 +446,21 @@ class TerminalBuffer:
 
 # ── Terminal lifecycle ─────────────────────────────────────────────────────────
 
+_ORIG_TERMIOS = None
+_IN_RAW_SESSION = False
+
+try:
+    if sys.stdin.isatty():
+        _ORIG_TERMIOS = termios.tcgetattr(sys.stdin.fileno())
+except Exception:
+    pass
+
+
 def _reset_terminal():
     """Restore terminal to a sane state — called automatically on exit."""
     try:
+        if sys.stdin.isatty() and _ORIG_TERMIOS is not None:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _ORIG_TERMIOS)
         sys.stdout.write("\033[?1049l")   # exit alternate screen buffer
         sys.stdout.write("\033[?25h")     # show cursor
         sys.stdout.write("\033[?1000l\033[?1002l\033[?1003l\033[?1015l\033[?1006l")
@@ -1696,31 +1709,149 @@ def launch_unified(profile, args):
     sys.exit(0)
 
 
-# ── Terminal I/O ───────────────────────────────────────────────────────────────
+# ── Terminal I/O & Raw Session ────────────────────────────────────────────────
+
+class RawTerminalSession:
+    """Keep terminal in cbreak/no-echo mode across the entire interactive session.
+    Completely eliminates arrow key escape sequence leakage (^[[A, ^[[B, ^^AA, ^^BB).
+    """
+    def __init__(self):
+        self.fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+
+    def __enter__(self):
+        global _IN_RAW_SESSION
+        if self.fd is not None:
+            try:
+                raw_attr = termios.tcgetattr(self.fd)
+                raw_attr[3] &= ~(termios.ECHO | termios.ICANON)
+                if hasattr(termios, "ECHOCTL"):
+                    raw_attr[3] &= ~termios.ECHOCTL
+                if hasattr(termios, "ECHONL"):
+                    raw_attr[3] &= ~termios.ECHONL
+                raw_attr[6][termios.VMIN] = 1
+                raw_attr[6][termios.VTIME] = 0
+                termios.tcsetattr(self.fd, termios.TCSADRAIN, raw_attr)
+                _IN_RAW_SESSION = True
+            except Exception:
+                pass
+        return self
+
+    def __exit__(self, *args):
+        global _IN_RAW_SESSION
+        _IN_RAW_SESSION = False
+        if self.fd is not None and _ORIG_TERMIOS is not None:
+            try:
+                termios.tcsetattr(self.fd, termios.TCSADRAIN, _ORIG_TERMIOS)
+            except Exception:
+                pass
+
+
+def prompt_input(prompt_text):
+    """Safely prompt for text input while temporarily restoring cooked/echo mode."""
+    fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+    if fd is not None and _ORIG_TERMIOS is not None:
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, _ORIG_TERMIOS)
+        except Exception:
+            pass
+    try:
+        return input(prompt_text)
+    finally:
+        if fd is not None and _IN_RAW_SESSION:
+            try:
+                raw_attr = termios.tcgetattr(fd)
+                raw_attr[3] &= ~(termios.ECHO | termios.ICANON)
+                if hasattr(termios, "ECHOCTL"):
+                    raw_attr[3] &= ~termios.ECHOCTL
+                if hasattr(termios, "ECHONL"):
+                    raw_attr[3] &= ~termios.ECHONL
+                raw_attr[6][termios.VMIN] = 1
+                raw_attr[6][termios.VTIME] = 0
+                termios.tcsetattr(fd, termios.TCSADRAIN, raw_attr)
+            except Exception:
+                pass
+
 
 def get_key():
-    """Read one keypress from raw stdin — handles arrow keys, Enter, Ctrl-C."""
+    """Read one keypress from raw stdin — handles ANSI/SS3 arrow keys, vim keys, Enter, Esc, Ctrl-C."""
+    if not sys.stdin.isatty():
+        return "other"
+
     fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
+    must_restore = False
+    saved = None
+
+    if not _IN_RAW_SESSION:
+        try:
+            saved = termios.tcgetattr(fd)
+            raw = termios.tcgetattr(fd)
+            raw[3] &= ~(termios.ECHO | termios.ICANON)
+            if hasattr(termios, "ECHOCTL"):
+                raw[3] &= ~termios.ECHOCTL
+            if hasattr(termios, "ECHONL"):
+                raw[3] &= ~termios.ECHONL
+            raw[6][termios.VMIN] = 1
+            raw[6][termios.VTIME] = 0
+            termios.tcsetattr(fd, termios.TCSADRAIN, raw)
+            must_restore = True
+        except Exception:
+            pass
+
     try:
-        tty.setraw(fd)
-        ch = os.read(fd, 1)
-        if ch == b'\x1b':
-            # Switch to 100 ms timeout to read escape sequence tail
-            esc = termios.tcgetattr(fd)
-            esc[6][termios.VMIN]  = 0
-            esc[6][termios.VTIME] = 1
-            termios.tcsetattr(fd, termios.TCSANOW, esc)
-            rest = os.read(fd, 6)
-            if rest.startswith(b'[A'): return 'up'
-            if rest.startswith(b'[B'): return 'down'
-            return 'other'
-        if ch in (b'\r', b'\n'): return 'enter'
-        if ch == b'\x03':        return 'ctrl_c'
-        if ch == b'\x7f':        return 'backspace'
+        try:
+            ch = os.read(fd, 1)
+        except Exception:
+            return "other"
+
+        if not ch:
+            return "other"
+
+        if ch == b"\x1b":
+            # Check if more bytes follow immediately (part of escape sequence)
+            r, _, _ = select.select([fd], [], [], 0.05)
+            if r:
+                try:
+                    rest = os.read(fd, 16)
+                except Exception:
+                    return "escape"
+
+                # Up arrow (ANSI '\x1b[A', SS3 '\x1bOA', or modified '\x1b[1;2A')
+                if rest.startswith(b"[A") or rest.startswith(b"OA") or b"[1;2A" in rest or b"[1;5A" in rest:
+                    return "up"
+                # Down arrow (ANSI '\x1b[B', SS3 '\x1bOB', or modified '\x1b[1;2B')
+                if rest.startswith(b"[B") or rest.startswith(b"OB") or b"[1;2B" in rest or b"[1;5B" in rest:
+                    return "down"
+                if rest.startswith(b"[C") or rest.startswith(b"OC"):
+                    return "right"
+                if rest.startswith(b"[D") or rest.startswith(b"OD"):
+                    return "left"
+                if rest.startswith(b"[H") or rest == b"[1~":
+                    return "home"
+                if rest.startswith(b"[F") or rest == b"[4~":
+                    return "end"
+                return "other"
+            return "escape"
+
+        if ch in (b"\r", b"\n"):
+            return "enter"
+        if ch == b"\x03":
+            return "ctrl_c"
+        if ch in (b"\x7f", b"\x08"):
+            return "backspace"
+        if ch in (b"k", b"K"):
+            return "up"
+        if ch in (b"j", b"J"):
+            return "down"
+        if ch in (b"q", b"Q"):
+            return "q"
+
+        return "other"
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    return 'other'
+        if must_restore and saved is not None:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+            except Exception:
+                pass
 
 
 def clear_screen():
@@ -1795,7 +1926,7 @@ def show_community():
                 webbrowser.open(url)
             else:
                 return
-        elif key in ('ctrl_c', 'other'):
+        elif key in ('ctrl_c', 'escape', 'backspace', 'q'):
             return
 
 
@@ -1844,7 +1975,7 @@ def ask_mode():
                 show_community()
             else:
                 return lbl
-        elif key == 'ctrl_c':
+        elif key in ('ctrl_c', 'escape', 'q'):
             return "EXIT"
 
 
@@ -1933,8 +2064,11 @@ def interactive_menu(profiles, launch_mode="isolated"):
             current_idx = (current_idx - 1) % len(options)
         elif key == 'down':
             current_idx = (current_idx + 1) % len(options)
-        elif key == 'ctrl_c':
-            return "EXIT"
+        elif key in ('ctrl_c', 'q', 'escape'):
+            if mode == "main":
+                return "EXIT"
+            mode = "main"
+            current_idx = 0
         elif key == 'enter':
             if mode == "main":
                 n = len(profiles)
@@ -1961,7 +2095,7 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     try:
                         clear_screen()
                         draw_header()
-                        raw = input(f" {C_GREEN}New profile name:{C_RESET} ")
+                        raw = prompt_input(f" {C_GREEN}New profile name:{C_RESET} ")
                     except (EOFError, KeyboardInterrupt):
                         raw = ""
                     sys.stdout.write("\033[?1049h\033[?25l")
@@ -1986,7 +2120,7 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     try:
                         clear_screen()
                         draw_header()
-                        raw = input(f" {C_YELLOW}Rename '{p_old}' to:{C_RESET} ").strip()
+                        raw = prompt_input(f" {C_YELLOW}Rename '{p_old}' to:{C_RESET} ").strip()
                     except (EOFError, KeyboardInterrupt):
                         raw = ""
                     sys.stdout.write("\033[?1049h\033[?25l")
@@ -2480,17 +2614,18 @@ def main():
 
     exiting = False
     try:
-        mode = ask_mode()
-        if mode == "EXIT":
-            exiting = True
-            return
+        with RawTerminalSession():
+            mode = ask_mode()
+            if mode == "EXIT":
+                exiting = True
+                return
 
-        profiles = _list_profiles()
+            profiles = _list_profiles()
 
-        selected_profile = interactive_menu(profiles, launch_mode=mode)
-        if selected_profile == "EXIT" or not selected_profile:
-            exiting = True
-            return
+            selected_profile = interactive_menu(profiles, launch_mode=mode)
+            if selected_profile == "EXIT" or not selected_profile:
+                exiting = True
+                return
 
     finally:
         # Always restore terminal FIRST
