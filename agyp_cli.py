@@ -13,6 +13,7 @@ import re
 import tty
 import json
 import time
+import base64
 import shutil
 import atexit
 import termios
@@ -20,7 +21,11 @@ import subprocess
 import webbrowser
 import signal
 import threading
-from datetime import datetime
+import urllib.request
+import urllib.error
+import urllib.parse
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # ── Platform guard ─────────────────────────────────────────────────────────────
@@ -49,7 +54,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.5.2"
+VERSION = "1.6.0"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -61,6 +66,17 @@ C_WHITE  = "\033[37m"          # plain white — no bold, prevents icon size jum
 C_GRAY   = "\033[38;5;245m"
 C_RESET  = "\033[0m"
 C_JOIN   = "\033[38;2;112;230;39m"   # bright lime green (X logo color)
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+def _visible_len(s):
+    """Return visible character length of string without ANSI escape sequences."""
+    return len(_ANSI_RE.sub("", s))
+
+def pad_ansi(s, width):
+    """Pad a string containing ANSI escape sequences to target visible width."""
+    vis = _visible_len(s)
+    return s + " " * max(0, width - vis)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 PROFILES_DIR     = _SYSTEM_HOME / "agyp-profiles"
@@ -718,6 +734,314 @@ def _persist_profile_email(profile_name, session_start_ts=None):
                 updates["email"] = email
 
     _save_meta(profile_name, **updates)
+
+
+# ── Quota & Usage Manager ──────────────────────────────────────────────────────
+# Antigravity CLI accounts query the internal Google Cloud models endpoint to
+# track usage. Gemini models track a rolling 5-hour window quota (shared across
+# flash and pro models). Claude models track their separate quota allocation.
+# When an access token expires (1h lifetime), this module automatically refreshes
+# it via Google OAuth2 token endpoint using the profile's saved refresh token.
+
+_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_MODELS_API_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+_QUOTA_CACHE_TTL = 120  # seconds
+
+_MEM_QUOTA_CACHE = {}  # In-memory fast cache: {profile_name: quota_dict}
+_AGY_OAUTH_CREDS = None
+
+
+def _get_agy_oauth_creds():
+    """Extract official Google OAuth client credentials dynamically from local agy binary."""
+    global _AGY_OAUTH_CREDS
+    if _AGY_OAUTH_CREDS:
+        return _AGY_OAUTH_CREDS
+
+    candidates = [
+        shutil.which("agy"),
+        str(REAL_HOME / ".local/bin/agy"),
+        "/usr/local/bin/agy",
+        "/usr/bin/agy",
+    ]
+    cid, sec = None, None
+    for p in candidates:
+        if p and Path(p).is_file():
+            try:
+                with open(p, "rb") as f:
+                    data = f.read()
+                m_ids = re.findall(rb"(1071006060591-[a-z0-9]+\.apps\.googleusercontent\.com)", data)
+                if not m_ids:
+                    m_ids = re.findall(rb"([0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com)", data)
+                if m_ids:
+                    cid = m_ids[0].decode("utf-8")
+                m_sec = re.findall(rb"(GOCSPX-[A-Za-z0-9_-]{28})", data)
+                if m_sec:
+                    sec = m_sec[0].decode("utf-8")
+                if cid and sec:
+                    break
+            except Exception:
+                pass
+
+    _AGY_OAUTH_CREDS = (cid, sec)
+    return _AGY_OAUTH_CREDS
+
+
+def format_reset_delta(reset_str):
+    """Format an ISO 8601 reset timestamp into a concise relative duration (e.g. '14m', '4h 50m', '3d 22h')."""
+    if not reset_str:
+        return ""
+    try:
+        r_str = reset_str[:-1] + "+00:00" if reset_str.endswith("Z") else reset_str
+        reset_dt = datetime.fromisoformat(r_str)
+        diff = reset_dt - datetime.now(timezone.utc)
+        total_seconds = int(diff.total_seconds())
+        if total_seconds <= 0:
+            return ""
+        mins = total_seconds // 60
+        hours = mins // 60
+        days = hours // 24
+        if days > 0:
+            rem_h = hours % 24
+            return f"{days}d {rem_h}h" if rem_h else f"{days}d"
+        elif hours > 0:
+            rem_m = mins % 60
+            return f"{hours}h {rem_m}m" if rem_m else f"{hours}h"
+        else:
+            return f"{mins}m"
+    except Exception:
+        return ""
+
+
+def _parse_model_quota(models_dict, prefix="gemini"):
+    """Extract quota percentage and reset time for a model family (gemini or claude)."""
+    if prefix == "gemini":
+        preferred = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3.1-pro-high", "gemini-3-flash"]
+    else:
+        preferred = ["claude-sonnet-4-6", "claude-opus-4-6-thinking"]
+
+    target_info = None
+    for k in preferred:
+        if k in models_dict and isinstance(models_dict[k], dict) and "quotaInfo" in models_dict[k]:
+            target_info = models_dict[k]["quotaInfo"]
+            break
+
+    if not target_info:
+        for k, v in models_dict.items():
+            if k.startswith(prefix) and isinstance(v, dict) and "quotaInfo" in v:
+                target_info = v["quotaInfo"]
+                break
+
+    if not target_info:
+        return None
+
+    rem = target_info.get("remainingFraction")
+    reset_time = target_info.get("resetTime")
+
+    # If reset_time is in the past, quota has already refreshed to 100%
+    if reset_time:
+        try:
+            r_str = reset_time[:-1] + "+00:00" if reset_time.endswith("Z") else reset_time
+            r_dt = datetime.fromisoformat(r_str)
+            if (r_dt - datetime.now(timezone.utc)).total_seconds() <= 0:
+                return {"pct": 100, "reset_time": None}
+        except Exception:
+            pass
+
+    if rem is not None:
+        pct = max(0, min(100, int(round(rem * 100))))
+    elif reset_time:
+        pct = 0
+    else:
+        pct = 100
+
+    return {"pct": pct, "reset_time": reset_time}
+
+
+def _refresh_profile_token(profile_name, refresh_token):
+    """Refresh an expired access token using Google OAuth2 endpoint, persisting update to disk."""
+    if not refresh_token:
+        return None
+    cid, sec = _get_agy_oauth_creds()
+    if not cid or not sec:
+        return None
+    try:
+        payload = urllib.parse.urlencode({
+            "client_id": cid,
+            "client_secret": sec,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            _OAUTH_TOKEN_URL,
+            data=payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            new_atk = data.get("access_token")
+            if new_atk:
+                p_dir = PROFILES_DIR / profile_name
+                tok_file = p_dir / KEYRING_TOKEN_FILE
+                if tok_file.exists():
+                    try:
+                        t_data = json.loads(tok_file.read_text(encoding="utf-8"))
+                        if "token" in t_data and isinstance(t_data["token"], dict):
+                            t_data["token"]["access_token"] = new_atk
+                            if "expires_in" in data:
+                                t_data["token"]["expiry"] = datetime.now(timezone.utc).isoformat()
+                            tok_file.write_text(json.dumps(t_data, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
+                return new_atk
+    except Exception:
+        pass
+    return None
+
+
+def fetch_profile_quota(profile_name, force=False):
+    """Fetch live or cached quota usage for a profile."""
+    # 1. Fast in-memory cache check
+    cached = _MEM_QUOTA_CACHE.get(profile_name)
+    if not force and cached and (time.time() - cached.get("fetched_at", 0) < _QUOTA_CACHE_TTL):
+        return cached
+
+    # 2. Check persistent metadata
+    if not force:
+        meta = _load_meta(profile_name)
+        m_quota = meta.get("quota")
+        if m_quota and (time.time() - m_quota.get("fetched_at", 0) < _QUOTA_CACHE_TTL):
+            _MEM_QUOTA_CACHE[profile_name] = m_quota
+            return m_quota
+
+    # 3. Read profile token
+    p_dir = PROFILES_DIR / profile_name
+    tok_file = p_dir / KEYRING_TOKEN_FILE
+    if not tok_file.exists() or tok_file.stat().st_size <= 10:
+        return None
+
+    try:
+        data = json.loads(tok_file.read_text(encoding="utf-8"))
+        tok = data.get("token", {})
+        access_token = tok.get("access_token")
+        refresh_token = tok.get("refresh_token")
+    except Exception:
+        return None
+
+    if not access_token:
+        return None
+
+    def _query_api(atk):
+        req = urllib.request.Request(
+            _MODELS_API_URL,
+            headers={
+                "Authorization": f"Bearer {atk}",
+                "Content-Type": "application/json",
+                "User-Agent": "antigravity-cli",
+            },
+            data=b"{}",
+        )
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    models_data = None
+    try:
+        models_data = _query_api(access_token)
+    except urllib.error.HTTPError as e:
+        if e.code == 401 and refresh_token:
+            new_atk = _refresh_profile_token(profile_name, refresh_token)
+            if new_atk:
+                try:
+                    models_data = _query_api(new_atk)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    if not models_data or "models" not in models_data:
+        meta = _load_meta(profile_name)
+        return meta.get("quota")
+
+    models = models_data.get("models", {})
+    gemini_q = _parse_model_quota(models, "gemini")
+    claude_q = _parse_model_quota(models, "claude")
+
+    quota_dict = {
+        "gemini": gemini_q,
+        "claude": claude_q,
+        "fetched_at": time.time(),
+    }
+
+    _MEM_QUOTA_CACHE[profile_name] = quota_dict
+    _save_meta(profile_name, quota=quota_dict)
+    return quota_dict
+
+
+def batch_fetch_quotas(profiles, force=False, max_workers=10):
+    """Fetch quotas in parallel for profiles that need refresh."""
+    to_fetch = []
+    now = time.time()
+    for p in profiles:
+        tok_file = PROFILES_DIR / p / KEYRING_TOKEN_FILE
+        if not tok_file.exists() or tok_file.stat().st_size <= 10:
+            continue
+        cached = _MEM_QUOTA_CACHE.get(p)
+        if not force and cached and (now - cached.get("fetched_at", 0) < _QUOTA_CACHE_TTL):
+            continue
+        if not force:
+            meta = _load_meta(p)
+            m_quota = meta.get("quota")
+            if m_quota and (now - m_quota.get("fetched_at", 0) < _QUOTA_CACHE_TTL):
+                _MEM_QUOTA_CACHE[p] = m_quota
+                continue
+        to_fetch.append(p)
+
+    if not to_fetch:
+        return
+
+    workers = min(len(to_fetch), max_workers)
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            list(executor.map(lambda name: fetch_profile_quota(name, force=force), to_fetch))
+    except Exception:
+        pass
+
+
+def _color_quota_pct(pct):
+    if pct is None:
+        return f"{C_GRAY}—{C_RESET}"
+    if pct >= 75:
+        c = C_GREEN
+    elif pct >= 25:
+        c = C_YELLOW
+    else:
+        c = C_RED
+    return f"{c}{pct:>3}%{C_RESET}"
+
+
+def format_quota_inline(quota_dict):
+    """Format Gemini (5h limit) and Claude quotas into a single-row colored string."""
+    if not quota_dict:
+        return ""
+    g_data = quota_dict.get("gemini")
+    c_data = quota_dict.get("claude")
+    if not g_data and not c_data:
+        return ""
+
+    parts = []
+    if g_data:
+        g_pct = g_data.get("pct")
+        g_rst = format_reset_delta(g_data.get("reset_time"))
+        g_rst_str = f" {C_GRAY}({g_rst}){C_RESET}" if (g_pct is not None and g_pct < 100 and g_rst) else ""
+        parts.append(f"{C_WHITE}Gemini:{C_RESET} {_color_quota_pct(g_pct)}{g_rst_str}")
+
+    if c_data:
+        c_pct = c_data.get("pct")
+        c_rst = format_reset_delta(c_data.get("reset_time"))
+        c_rst_str = f" {C_GRAY}({c_rst}){C_RESET}" if (c_pct is not None and c_pct < 100 and c_rst) else ""
+        parts.append(f"{C_WHITE}Claude:{C_RESET} {_color_quota_pct(c_pct)}{c_rst_str}")
+
+    sep = f" {C_GRAY}│{C_RESET} "
+    return sep.join(parts)
 
 
 # ── Token pre-seeding ──────────────────────────────────────────────────────────
@@ -1531,6 +1855,10 @@ def interactive_menu(profiles, launch_mode="isolated"):
     mode = "main"
     current_idx = 0
     options = []
+    max_email_len = max((len(get_profile_email(p) or "") for p in profiles), default=0)
+
+    # Background prefetch quotas so navigation remains completely fluid
+    threading.Thread(target=batch_fetch_quotas, args=(profiles,), daemon=True).start()
 
     def build_options():
         nonlocal options
@@ -1574,21 +1902,28 @@ def interactive_menu(profiles, launch_mode="isolated"):
 
             for i, opt in enumerate(options):
                 suffix = ""
-                if i < len(profiles) and mode in ("main", "delete", "rename"):
+                is_prof = i < len(profiles) and mode in ("main", "delete", "rename")
+                if is_prof:
                     email = get_profile_email(opt)
                     if email:
                         is_dupe = any(p != opt and get_profile_email(p) == email for p in profiles)
                         dupe_tag = f" {C_YELLOW}(duplicate){C_RESET}" if is_dupe else ""
-                        suffix = f"  {C_CYAN}[{email}]{C_RESET}{dupe_tag}"
+                        email_pad = " " * max(0, max_email_len - len(email))
+                        q = fetch_profile_quota(opt)
+                        q_inline = format_quota_inline(q)
+                        q_part = f"  {q_inline}" if q_inline else ""
+                        suffix = f"  {C_CYAN}[{email}]{C_RESET}{email_pad}{dupe_tag}{q_part}"
                     else:
                         suffix = f"  {C_YELLOW}[no account — login on launch]{C_RESET}"
+
+                p_disp = f"{opt:<4}" if is_prof else opt
                 if i == current_idx:
-                    print(f"  {C_BLUE}\u276f {opt}{suffix}{C_RESET}")
+                    print(f"  {C_BLUE}\u276f {p_disp}{suffix}{C_RESET}")
                 else:
                     if not opt.startswith('\033'):
-                        print(f"    {C_WHITE}{opt}{C_RESET}{suffix}")
+                        print(f"    {C_WHITE}{p_disp}{C_RESET}{suffix}")
                     else:
-                        print(f"    {opt}{suffix}")
+                        print(f"    {p_disp}{suffix}")
 
             print(f"\n {C_GRAY}\u2191/\u2193 to move \u00b7 Enter to select{C_RESET}")
 
@@ -1707,7 +2042,8 @@ def _print_help():
     print(f"  {C_WHITE}agyp{C_RESET}                           Launch interactive profile manager")
     print(f"  {C_WHITE}agyp <profile>{C_RESET}                 Launch a named profile (isolated mode)")
     print(f"  {C_WHITE}agyp <profile> [args...]{C_RESET}       Pass extra args to agy")
-    print(f"  {C_WHITE}agyp list{C_RESET}                      List all saved profiles")
+    print(f"  {C_WHITE}agyp list{C_RESET}                      List all saved profiles and quotas")
+    print(f"  {C_WHITE}agyp quota{C_RESET}                     Show account limits and remaining quota")
     print(f"  {C_WHITE}agyp info <profile>{C_RESET}            Show detailed profile info")
     print(f"  {C_WHITE}agyp rename <old> <new>{C_RESET}        Rename a profile")
     print(f"  {C_WHITE}agyp delete <profile>{C_RESET}          Delete a profile")
@@ -1726,6 +2062,11 @@ def _cmd_list():
         print(f"  {C_GRAY}No profiles yet. Run 'agyp' to create one.{C_RESET}\n")
         return
     print(f"  {C_WHITE}Saved profiles:{C_RESET}\n")
+
+    # Parallel prefetch to ensure displayed quotas are up-to-date
+    batch_fetch_quotas(profiles, force=False)
+    max_email_len = max((len(get_profile_email(p) or "") for p in profiles), default=0)
+
     for p in profiles:
         email     = get_profile_email(p)
         meta      = _load_meta(p)
@@ -1735,14 +2076,81 @@ def _cmd_list():
         if email:
             is_dupe = any(other != p and get_profile_email(other) == email for other in profiles)
             dupe_tag = f" {C_YELLOW}(duplicate){C_RESET}" if is_dupe else ""
-            email_part = f"  {C_CYAN}[{email}]{C_RESET}{dupe_tag}"
+            email_pad = " " * max(0, max_email_len - len(email))
+            email_part = f"  {C_CYAN}[{email}]{C_RESET}{email_pad}{dupe_tag}"
+            q = fetch_profile_quota(p)
+            q_inline = format_quota_inline(q)
+            quota_part = f"  {q_inline}" if q_inline else ""
         else:
             email_part = f"  {C_YELLOW}[no account — login on launch]{C_RESET}"
+            quota_part = ""
+
         date_part  = (
             f"  {C_GRAY}last: {last_used[:10]}{C_RESET}" if last_used else
             (f"  {C_GRAY}created: {created[:10]}{C_RESET}" if created else "")
         )
-        print(f"  {C_BLUE}·{C_RESET} {C_WHITE}{p}{C_RESET}{email_part}{date_part}")
+        print(f"  {C_BLUE}·{C_RESET} {C_WHITE}{p:<4}{C_RESET}{email_part}{quota_part}{date_part}")
+    print()
+
+
+def _cmd_quota():
+    """Print a clean, aligned table of account quotas and reset limits."""
+    profiles = _list_profiles()
+    if not profiles:
+        print(f"\n  {C_GRAY}No profiles yet. Run 'agyp' to create one.{C_RESET}\n")
+        return
+
+    sys.stdout.write(f"\r\033[K  {C_BLUE}Fetching quotas...{C_RESET}")
+    sys.stdout.flush()
+    batch_fetch_quotas(profiles, force=False)
+    sys.stdout.write("\r\033[K")
+    sys.stdout.flush()
+
+    print(f"\n  {C_WHITE}Account Limits & Quota Usage:{C_RESET}\n")
+    max_p = max(len(p) for p in profiles)
+    p_w = max(8, max_p + 2)
+    emails = [get_profile_email(p) or "—" for p in profiles]
+    e_w = max(24, max(len(e) for e in emails) + 2)
+
+    header = f"  {'Profile':<{p_w}} {'Email':<{e_w}} {'Gemini (5h Limit)':<24} {'Claude (Weekly)':<24} {'Last Used'}"
+    print(f"{C_GRAY}{header}{C_RESET}")
+    print(f"  {C_GRAY}{'─' * (p_w + e_w + 62)}{C_RESET}")
+
+    for p in profiles:
+        email = get_profile_email(p) or "—"
+        meta = _load_meta(p)
+        last_used = meta.get("last_used", "")
+        last_str = last_used[:10] if last_used else "—"
+
+        q = fetch_profile_quota(p)
+        if not q or (not q.get("gemini") and not q.get("claude")):
+            if email == "—":
+                g_str = f"{C_YELLOW}login required{C_RESET}"
+                c_str = f"{C_GRAY}—{C_RESET}"
+            else:
+                g_str = f"{C_GRAY}unavailable{C_RESET}"
+                c_str = f"{C_GRAY}unavailable{C_RESET}"
+        else:
+            g = q.get("gemini", {})
+            g_pct = g.get("pct")
+            g_rst = format_reset_delta(g.get("reset_time"))
+            g_col = _color_quota_pct(g_pct)
+            g_rst_info = f" {C_GRAY}(in {g_rst}){C_RESET}" if (g_pct is not None and g_pct < 100 and g_rst) else ""
+            g_str = f"{g_col}{g_rst_info}"
+
+            c = q.get("claude", {})
+            c_pct = c.get("pct")
+            c_rst = format_reset_delta(c.get("reset_time"))
+            c_col = _color_quota_pct(c_pct)
+            c_rst_info = f" {C_GRAY}(in {c_rst}){C_RESET}" if (c_pct is not None and c_pct < 100 and c_rst) else ""
+            c_str = f"{c_col}{c_rst_info}"
+
+        p_padded = pad_ansi(f"{C_WHITE}{p}{C_RESET}", p_w)
+        e_padded = pad_ansi(f"{C_CYAN}{email}{C_RESET}", e_w)
+        g_padded = pad_ansi(g_str, 24)
+        c_padded = pad_ansi(c_str, 24)
+
+        print(f"  {p_padded} {e_padded} {g_padded} {c_padded} {C_GRAY}{last_str}{C_RESET}")
     print()
 
 
@@ -1785,10 +2193,27 @@ def _cmd_info(profile_name):
         else f"{C_YELLOW}not saved — login required on next launch{C_RESET}"
     )
 
-    W = 14
+    W = 15
     print(f"\n  {C_WHITE}Profile: {name}{C_RESET}")
     print(f"  {'Email:':<{W}} {email}")
     print(f"  {'Auth token:':<{W}} {token_str}")
+
+    # Live Quota info
+    q = fetch_profile_quota(name)
+    if q:
+        g = q.get("gemini")
+        if g:
+            g_pct = g.get("pct")
+            g_rst = format_reset_delta(g.get("reset_time"))
+            g_rst_str = f" {C_GRAY}(resets in {g_rst}){C_RESET}" if (g_pct is not None and g_pct < 100 and g_rst) else ""
+            print(f"  {'Gemini quota:':<{W}} {_color_quota_pct(g_pct)}{g_rst_str} {C_GRAY}[5h rolling limit]{C_RESET}")
+        c = q.get("claude")
+        if c:
+            c_pct = c.get("pct")
+            c_rst = format_reset_delta(c.get("reset_time"))
+            c_rst_str = f" {C_GRAY}(resets in {c_rst}){C_RESET}" if (c_pct is not None and c_pct < 100 and c_rst) else ""
+            print(f"  {'Claude quota:':<{W}} {_color_quota_pct(c_pct)}{c_rst_str} {C_GRAY}[weekly limit]{C_RESET}")
+
     print(f"  {'Created:':<{W}} {created[:19] if created != '—' else created}")
     print(f"  {'Last used:':<{W}} {last_used[:19] if last_used != '—' else last_used}")
     print(f"  {'Disk usage:':<{W}} {size_str}")
@@ -1999,6 +2424,10 @@ def main():
 
     if argv and argv[0] == "list":
         _cmd_list()
+        return
+
+    if argv and argv[0] in ("quota", "limits", "usage"):
+        _cmd_quota()
         return
 
     if argv and argv[0] == "info":

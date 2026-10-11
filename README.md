@@ -78,14 +78,16 @@ You'll be greeted by an interactive menu to choose your launch mode and select a
 
 | Command | Description |
 |---|---|
-| `agyp` | Launch the interactive profile manager |
+| `agyp` | Launch the interactive profile manager (with live quota meters) |
 | `agyp <profile>` | Launch a named profile directly (isolated mode) |
 | `agyp <profile> [args...]` | Launch a profile and pass extra args to `agy` |
-| `agyp list` | List all profiles with email and last-used date |
-| `agyp info <profile>` | Show detailed info: email, token status, disk usage, dates |
+| `agyp list` | List all profiles with email, live Gemini (5h) & Claude quotas |
+| `agyp quota` | View a dedicated table of Gemini & Claude quota limits and reset timers |
+| `agyp info <profile>` | Show detailed info: email, token status, live quotas, disk usage, dates |
 | `agyp rename <old> <new>` | Rename a profile |
 | `agyp delete <profile>` | Delete a profile (with confirmation prompt) |
-| `agyp duplicate <src> <dst>` | Clone a profile including its saved auth tokens |
+| `agyp duplicate <src> <dst>` | Clone a profile workspace |
+| `agyp reset-auth <profile>` | Clear saved tokens for a profile to force fresh login |
 | `agyp --version` | Show version |
 | `agyp --help` | Show help |
 
