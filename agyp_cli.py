@@ -55,7 +55,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.6.2"
+VERSION = "1.6.3"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -911,7 +911,7 @@ def _refresh_profile_token(profile_name, refresh_token):
     return None
 
 
-def fetch_profile_quota(profile_name, force=False):
+def fetch_profile_quota(profile_name, force=False, network=True):
     """Fetch live or cached quota usage for a profile."""
     # 1. Fast in-memory cache check
     cached = _MEM_QUOTA_CACHE.get(profile_name)
@@ -919,12 +919,21 @@ def fetch_profile_quota(profile_name, force=False):
         return cached
 
     # 2. Check persistent metadata
+    meta = None
     if not force:
         meta = _load_meta(profile_name)
         m_quota = meta.get("quota")
         if m_quota and (time.time() - m_quota.get("fetched_at", 0) < _QUOTA_CACHE_TTL):
             _MEM_QUOTA_CACHE[profile_name] = m_quota
             return m_quota
+
+    # If network requests are disabled (e.g. for instant UI render), return cached metadata or None immediately
+    if not network:
+        if cached:
+            return cached
+        if meta is None:
+            meta = _load_meta(profile_name)
+        return meta.get("quota")
 
     # 3. Read profile token
     p_dir = PROFILES_DIR / profile_name
@@ -1711,8 +1720,29 @@ def launch_unified(profile, args):
 
 # ── Terminal I/O & Raw Session ────────────────────────────────────────────────
 
+def drain_input():
+    """Flush any pending input in stdin buffer to prevent key/click bleed-through between screens."""
+    if not sys.stdin.isatty():
+        return
+    fd = sys.stdin.fileno()
+    try:
+        termios.tcflush(fd, termios.TCIFLUSH)
+    except Exception:
+        pass
+    while True:
+        r, _, _ = select.select([fd], [], [], 0.01)
+        if r:
+            try:
+                os.read(fd, 1024)
+            except Exception:
+                break
+        else:
+            break
+
+
 class RawTerminalSession:
     """Keep terminal in cbreak/no-echo mode across the entire interactive session.
+    Enables mouse tracking (SGR 1006) for clicking and mouse-wheel scrolling.
     Completely eliminates arrow key escape sequence leakage (^[[A, ^[[B, ^^AA, ^^BB).
     """
     def __init__(self):
@@ -1732,6 +1762,9 @@ class RawTerminalSession:
                 raw_attr[6][termios.VTIME] = 0
                 termios.tcsetattr(self.fd, termios.TCSADRAIN, raw_attr)
                 _IN_RAW_SESSION = True
+                # Enable mouse reporting (SGR 1006 extended mode + button tracking)
+                sys.stdout.write("\033[?1000h\033[?1002h\033[?1006h")
+                sys.stdout.flush()
             except Exception:
                 pass
         return self
@@ -1739,6 +1772,12 @@ class RawTerminalSession:
     def __exit__(self, *args):
         global _IN_RAW_SESSION
         _IN_RAW_SESSION = False
+        try:
+            # Disable mouse reporting
+            sys.stdout.write("\033[?1006l\033[?1002l\033[?1000l")
+            sys.stdout.flush()
+        except Exception:
+            pass
         if self.fd is not None and _ORIG_TERMIOS is not None:
             try:
                 termios.tcsetattr(self.fd, termios.TCSADRAIN, _ORIG_TERMIOS)
@@ -1749,6 +1788,12 @@ class RawTerminalSession:
 def prompt_input(prompt_text):
     """Safely prompt for text input while temporarily restoring cooked/echo mode."""
     fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+    drain_input()
+    try:
+        sys.stdout.write("\033[?1006l\033[?1002l\033[?1000l")
+        sys.stdout.flush()
+    except Exception:
+        pass
     if fd is not None and _ORIG_TERMIOS is not None:
         try:
             termios.tcsetattr(fd, termios.TCSADRAIN, _ORIG_TERMIOS)
@@ -1757,6 +1802,7 @@ def prompt_input(prompt_text):
     try:
         return input(prompt_text)
     finally:
+        drain_input()
         if fd is not None and _IN_RAW_SESSION:
             try:
                 raw_attr = termios.tcgetattr(fd)
@@ -1768,12 +1814,20 @@ def prompt_input(prompt_text):
                 raw_attr[6][termios.VMIN] = 1
                 raw_attr[6][termios.VTIME] = 0
                 termios.tcsetattr(fd, termios.TCSADRAIN, raw_attr)
+                sys.stdout.write("\033[?1000h\033[?1002h\033[?1006h")
+                sys.stdout.flush()
             except Exception:
                 pass
 
 
 def get_key():
-    """Read one keypress from raw stdin — handles ANSI/SS3 arrow keys, vim keys, Enter, Esc, Ctrl-C."""
+    """Read one keypress or mouse event from raw stdin.
+    Returns:
+      - 'up', 'down', 'left', 'right', 'home', 'end'
+      - 'enter', 'ctrl_c', 'escape', 'backspace'
+      - ('click', row, col) for mouse left clicks
+      - 'other'
+    """
     if not sys.stdin.isatty():
         return "other"
 
@@ -1811,9 +1865,51 @@ def get_key():
             r, _, _ = select.select([fd], [], [], 0.05)
             if r:
                 try:
-                    rest = os.read(fd, 16)
+                    rest = os.read(fd, 64)
                 except Exception:
                     return "escape"
+
+                # SGR 1006 mouse sequence: \x1b[<btn;col;rowM (press/scroll) or m (release)
+                if rest.startswith(b"[<"):
+                    while not (rest.endswith(b"M") or rest.endswith(b"m")):
+                        r2, _, _ = select.select([fd], [], [], 0.02)
+                        if r2:
+                            try:
+                                chunk = os.read(fd, 32)
+                                if not chunk:
+                                    break
+                                rest += chunk
+                            except Exception:
+                                break
+                        else:
+                            break
+                    m = re.match(r"^\[<(\d+);(\d+);(\d+)([Mm])", rest.decode("latin1", errors="ignore"))
+                    if m:
+                        btn = int(m.group(1))
+                        col = int(m.group(2))
+                        row = int(m.group(3))
+                        state = m.group(4)
+                        if state == "M":
+                            if btn == 64:
+                                return "up"
+                            elif btn == 65:
+                                return "down"
+                            elif btn == 0:
+                                return ("click", row, col)
+                        return "other"
+
+                # X10 normal mouse sequence: \x1b[M b x y
+                if rest.startswith(b"[M") and len(rest) >= 5:
+                    btn = rest[2] - 32
+                    col = rest[3] - 32
+                    row = rest[4] - 32
+                    if btn == 64:
+                        return "up"
+                    elif btn == 65:
+                        return "down"
+                    elif btn == 0:
+                        return ("click", row, col)
+                    return "other"
 
                 # Up arrow (ANSI '\x1b[A', SS3 '\x1bOA', or modified '\x1b[1;2A')
                 if rest.startswith(b"[A") or rest.startswith(b"OA") or b"[1;2A" in rest or b"[1;5A" in rest:
@@ -1833,7 +1929,19 @@ def get_key():
             return "escape"
 
         if ch in (b"\r", b"\n"):
+            # If CRLF was sent (common in terminals), consume any trailing newline bytes
+            while True:
+                r, _, _ = select.select([fd], [], [], 0.02)
+                if r:
+                    try:
+                        extra = os.read(fd, 1)
+                        if extra in (b"\r", b"\n"):
+                            continue
+                    except Exception:
+                        pass
+                break
             return "enter"
+
         if ch == b"\x03":
             return "ctrl_c"
         if ch in (b"\x7f", b"\x08"):
@@ -1889,6 +1997,7 @@ def show_community():
     ]
 
     idx = 0
+    drain_input()
     while True:
         with TerminalBuffer():
             draw_header()
@@ -1906,20 +2015,29 @@ def show_community():
                         print(f"    {C_GRAY}{label}{C_RESET}  \033[38;2;100;100;100m{url}\033[0m")
                     else:
                         print(f"    {C_GRAY}[x] {label}{C_RESET}")
-            print(f"\n {C_GRAY}\u2191/\u2193 to move \u00b7 Enter to open \u00b7 Esc/Ctrl-C to go back{C_RESET}")
+            print(f"\n {C_GRAY}\u2191/\u2193 or scroll to move \u00b7 Enter or click to open \u00b7 Esc to go back{C_RESET}")
 
         key = get_key()
         if key == 'up':
             idx = (idx - 1) % len(links)
         elif key == 'down':
             idx = (idx + 1) % len(links)
-        elif key == 'enter':
+        elif isinstance(key, tuple) and key[0] == "click":
+            click_row = key[1]
+            clicked_idx = click_row - 15
+            if 0 <= clicked_idx < len(links):
+                idx = clicked_idx
+                key = 'enter'
+
+        if key == 'enter':
             url = links[idx][1]
             if url:
                 webbrowser.open(url)
             else:
+                drain_input()
                 return
         elif key in ('ctrl_c', 'escape', 'backspace'):
+            drain_input()
             return
 
 
@@ -1934,6 +2052,7 @@ def ask_mode():
         ("exit",     "",                       ""),
     ]
     idx = 0
+    drain_input()
     while True:
         with TerminalBuffer():
             draw_header()
@@ -1953,22 +2072,32 @@ def ask_mode():
                         print(f"    {C_JOIN}[♥] Join Us{C_RESET}")
                     else:
                         print(f"    {C_GRAY}{tag}{C_RESET}  {C_GRAY}{desc}{C_RESET}")
-            print(f"\n {C_GRAY}\u2191/\u2193 to move \u00b7 Enter to confirm{C_RESET}")
+            print(f"\n {C_GRAY}\u2191/\u2193 or scroll to move \u00b7 Enter or click to confirm{C_RESET}")
 
         key = get_key()
         if key == 'up':
             idx = (idx - 1) % len(options)
         elif key == 'down':
             idx = (idx + 1) % len(options)
-        elif key == 'enter':
+        elif isinstance(key, tuple) and key[0] == "click":
+            click_row = key[1]
+            clicked_idx = click_row - 11
+            if 0 <= clicked_idx < len(options):
+                idx = clicked_idx
+                key = 'enter'
+
+        if key == 'enter':
             lbl = options[idx][0]
+            drain_input()
             if lbl == "exit":
                 return "EXIT"
             elif lbl == "join_us":
                 show_community()
+                drain_input()
             else:
                 return lbl
         elif key in ('ctrl_c', 'escape'):
+            drain_input()
             return "EXIT"
 
 
@@ -2033,7 +2162,7 @@ def interactive_menu(profiles, launch_mode="isolated"):
                         is_dupe = any(p != opt and get_profile_email(p) == email for p in profiles)
                         dupe_tag = f" {C_YELLOW}(duplicate){C_RESET}" if is_dupe else ""
                         email_pad = " " * max(0, max_email_len - len(email))
-                        q = fetch_profile_quota(opt)
+                        q = fetch_profile_quota(opt, network=False)
                         q_inline = format_quota_inline(q)
                         q_part = f"  {q_inline}" if q_inline else ""
                         suffix = f"  {C_CYAN}[{email}]{C_RESET}{email_pad}{dupe_tag}{q_part}"
@@ -2049,7 +2178,7 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     else:
                         print(f"    {p_disp}{suffix}")
 
-            print(f"\n {C_GRAY}\u2191/\u2193 to move \u00b7 Enter to select{C_RESET}")
+            print(f"\n {C_GRAY}\u2191/\u2193 or scroll to move \u00b7 Enter or click to select{C_RESET}")
 
         key = get_key()
 
@@ -2057,29 +2186,45 @@ def interactive_menu(profiles, launch_mode="isolated"):
             current_idx = (current_idx - 1) % len(options)
         elif key == 'down':
             current_idx = (current_idx + 1) % len(options)
+        elif isinstance(key, tuple) and key[0] == "click":
+            click_row = key[1]
+            clicked_idx = click_row - 11
+            if 0 <= clicked_idx < len(options):
+                if current_idx == clicked_idx:
+                    key = 'enter'
+                else:
+                    current_idx = clicked_idx
         elif key == 'ctrl_c':
+            drain_input()
             return "EXIT"
         elif key == 'escape':
             if mode != "main":
                 mode = "main"
                 current_idx = 0
-        elif key == 'enter':
+                drain_input()
+        if key == 'enter':
             if mode == "main":
                 n = len(profiles)
                 if current_idx < n:
+                    drain_input()
                     return profiles[current_idx]
                 elif current_idx == n:        # Add Profile
                     mode = "create"
                     current_idx = 0
+                    drain_input()
                 elif current_idx == n + 1:    # Rename Profile
                     mode = "rename"
                     current_idx = 0
+                    drain_input()
                 elif current_idx == n + 2:    # Delete Profile
                     mode = "delete"
                     current_idx = 0
+                    drain_input()
                 elif current_idx == n + 3:    # Join Us
                     show_community()
+                    drain_input()
                 elif current_idx == n + 4:    # Exit
+                    drain_input()
                     return "EXIT"
 
             elif mode == "create":
@@ -2606,6 +2751,12 @@ def main():
     sys.stdout.write("\033[?1049h\033[?25l")   # enter alt-screen, hide cursor
     sys.stdout.flush()
 
+    # Prefetch quotas immediately in background so they are ready when profile list opens
+    try:
+        threading.Thread(target=batch_fetch_quotas, args=(_list_profiles(),), daemon=True).start()
+    except Exception:
+        pass
+
     exiting = False
     try:
         with RawTerminalSession():
@@ -2613,6 +2764,9 @@ def main():
             if mode == "EXIT":
                 exiting = True
                 return
+
+            time.sleep(0.05)
+            drain_input()
 
             profiles = _list_profiles()
 
