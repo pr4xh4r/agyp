@@ -49,7 +49,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -484,9 +484,13 @@ def _load_meta(profile_name):
 
 
 def _save_meta(profile_name, **kwargs):
-    """Persist key/value pairs into a profile's metadata file."""
+    """Persist key/value pairs into a profile's metadata file. Passing a key as None removes it."""
     meta = _load_meta(profile_name)
-    meta.update({k: v for k, v in kwargs.items() if v is not None})
+    for k, v in kwargs.items():
+        if v is None:
+            meta.pop(k, None)
+        else:
+            meta[k] = v
     META_DIR.mkdir(parents=True, exist_ok=True)
     try:
         (META_DIR / f"{profile_name}.json").write_text(
@@ -522,13 +526,60 @@ def _delete_meta(profile_name):
 # NOT at the top-level profile_dir/.gemini/…/cli.log.  Both locations are now
 # searched, with the most-recently-modified slot checked first.
 
-def _search_email_in_log(log_path):
-    """Scan a single cli.log for the most-recently-authenticated email."""
+def _parse_log_creation_time(log_path):
+    """Extract creation timestamp from cli-YYYYMMDD_HHMMSS.log filename."""
+    m = re.match(r"^cli-(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.log$", log_path.name)
+    if m:
+        try:
+            dt = datetime(
+                int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                int(m.group(4)), int(m.group(5)), int(m.group(6))
+            )
+            return dt.timestamp()
+        except Exception:
+            pass
+    return None
+
+
+def _search_email_in_log(log_path, session_start_ts=None):
+    """Scan a single cli.log for the most-recently-authenticated email.
+    If session_start_ts is provided, strictly ignores older logs and older auth events.
+    """
+    if not log_path.exists():
+        return None
+
+    if session_start_ts:
+        # Check filename creation timestamp first
+        log_created = _parse_log_creation_time(log_path)
+        if log_created is not None and log_created < session_start_ts - 5:
+            # File was created by an older session before this one started!
+            return None
+        try:
+            if log_path.stat().st_mtime < session_start_ts - 5:
+                return None
+        except Exception:
+            return None
+
     try:
         with open(log_path, "r", encoding="utf-8", errors="ignore") as fh:
             for line in reversed(fh.readlines()):
                 m = _EMAIL_RE.search(line)
                 if m:
+                    if session_start_ts:
+                        # Glog format: I1011 12:28:44.650999 ...
+                        tm = re.match(r"^[IWEF](\d{2})(\d{2})\s+(\d{2}):(\d{2}):(\d{2})", line)
+                        if tm:
+                            try:
+                                now_dt = datetime.fromtimestamp(session_start_ts)
+                                line_dt = datetime(
+                                    now_dt.year,
+                                    int(tm.group(1)), int(tm.group(2)),
+                                    int(tm.group(3)), int(tm.group(4)), int(tm.group(5))
+                                )
+                                if line_dt.timestamp() < session_start_ts - 5:
+                                    continue
+                            except Exception:
+                                pass
                     return m.group(1).strip()
     except Exception:
         pass
@@ -540,14 +591,25 @@ def get_profile_email(profile_name):
 
     Priority:
       1. Profile's saved keyring_token.json (parses real Google id_token JWT - cryptographic ground truth).
-      2. Persistent metadata (.meta/<name>.json).
-      3. Backup token file (keyring_token.json.bak).
-      4. Profile's local cli.log.
+      2. Backup token file (keyring_token.json.bak).
+      3. Persistent metadata (.meta/<name>.json) ONLY IF token file or backup exists.
+      4. Profile's local cli.log ONLY IF token file exists.
     """
     profile_dir = PROFILES_DIR / profile_name
+    token_file = profile_dir / KEYRING_TOKEN_FILE
+    bak_file = profile_dir / (KEYRING_TOKEN_FILE + ".bak")
+
+    has_token_file = (
+        (token_file.exists() and token_file.stat().st_size > 10)
+        or (bak_file.exists() and bak_file.stat().st_size > 10)
+        or any((profile_dir / rel).exists() for rel in _TOKEN_RELPATHS)
+    )
+
+    # A profile with no saved token files is not authenticated.
+    if not has_token_file:
+        return None
 
     # 1. Direct from profile's saved keyring token (cryptographic ground truth)
-    token_file = profile_dir / KEYRING_TOKEN_FILE
     if token_file.exists() and token_file.stat().st_size > 10:
         try:
             email = KeyringManager.extract_email(token_file.read_text(encoding="utf-8"))
@@ -557,13 +619,7 @@ def get_profile_email(profile_name):
         except Exception:
             pass
 
-    # 2. Metadata (persisted after session)
-    meta = _load_meta(profile_name)
-    if meta.get("email"):
-        return meta["email"]
-
-    # 3. Check backup token file
-    bak_file = profile_dir / (KEYRING_TOKEN_FILE + ".bak")
+    # 2. Check backup token file
     if bak_file.exists() and bak_file.stat().st_size > 10:
         try:
             email = KeyringManager.extract_email(bak_file.read_text(encoding="utf-8"))
@@ -573,7 +629,12 @@ def get_profile_email(profile_name):
         except Exception:
             pass
 
-    # 4. Profile's own local cli.log (NOT shared REAL_HOME)
+    # 3. Persistent metadata
+    meta = _load_meta(profile_name)
+    if meta.get("email"):
+        return meta["email"]
+
+    # 4. Profile's own local cli.log
     email = _search_email_in_log(
         profile_dir / ".gemini" / "antigravity-cli" / "cli.log"
     )
@@ -592,7 +653,8 @@ def _scan_logs_for_email(profile_name, session_start_ts=None):
 
     # Check profile-dir top-level log (isolated mode)
     email = _search_email_in_log(
-        profile_dir / ".gemini" / "antigravity-cli" / "cli.log"
+        profile_dir / ".gemini" / "antigravity-cli" / "cli.log",
+        session_start_ts=session_start_ts,
     )
     if email:
         return email
@@ -607,16 +669,14 @@ def _scan_logs_for_email(profile_name, session_start_ts=None):
                 reverse=True,
             )
             for log_file in logs:
-                if session_start_ts and log_file.stat().st_mtime < session_start_ts:
-                    continue
-                email = _search_email_in_log(log_file)
+                email = _search_email_in_log(log_file, session_start_ts=session_start_ts)
                 if email:
                     return email
         except Exception:
             pass
 
     # Only in unified mode (where logs write to REAL_HOME), check REAL_HOME logs
-    # BUT ONLY files created/modified AFTER session_start_ts!
+    # BUT ONLY files created during or after session_start_ts!
     if session_start_ts:
         log_dir = REAL_HOME / ".gemini" / "antigravity-cli" / "log"
         if log_dir.exists():
@@ -626,11 +686,10 @@ def _scan_logs_for_email(profile_name, session_start_ts=None):
                     key=lambda f: f.stat().st_mtime,
                     reverse=True,
                 )
-                for log_file in logs[:5]:
-                    if log_file.stat().st_mtime >= session_start_ts:
-                        email = _search_email_in_log(log_file)
-                        if email:
-                            return email
+                for log_file in logs[:10]:
+                    email = _search_email_in_log(log_file, session_start_ts=session_start_ts)
+                    if email:
+                        return email
             except Exception:
                 pass
 
@@ -641,15 +700,22 @@ def _persist_profile_email(profile_name, session_start_ts=None):
     """After a session, persist profile email and last_used timestamp.
     Guarantees: An existing bound email is NEVER overwritten by an unverified log scan.
     """
-    existing_email = get_profile_email(profile_name)
+    profile_dir = PROFILES_DIR / profile_name
     updates = {"last_used": datetime.now().isoformat()}
 
+    existing_email = get_profile_email(profile_name)
     if existing_email:
         updates["email"] = existing_email
-    else:
-        email = _scan_logs_for_email(profile_name, session_start_ts)
-        if email:
-            updates["email"] = email
+    elif session_start_ts:
+        has_token = (
+            (profile_dir / KEYRING_TOKEN_FILE).exists()
+            or (profile_dir / (KEYRING_TOKEN_FILE + ".bak")).exists()
+            or any((profile_dir / rel).exists() for rel in _TOKEN_RELPATHS)
+        )
+        if has_token:
+            email = _scan_logs_for_email(profile_name, session_start_ts)
+            if email:
+                updates["email"] = email
 
     _save_meta(profile_name, **updates)
 
@@ -688,9 +754,9 @@ def _is_fresh_profile(profile_dir):
     tok = profile_dir / KEYRING_TOKEN_FILE
     if tok.exists() and tok.stat().st_size > 10:
         return False
-    if (profile_dir / ".auth_saved").exists():
+    if any((profile_dir / rel).exists() for rel in _TOKEN_RELPATHS):
         return False
-    return not any((profile_dir / rel).exists() for rel in _TOKEN_RELPATHS)
+    return True
 
 
 def _deep_clear_real_home_auth():
@@ -918,8 +984,16 @@ def save_back_profile(profile_dir):
             if src_cache.exists():
                 shutil.copytree(src_cache, dst_cli / "cache", dirs_exist_ok=True)
 
-        # 3. Mark authentication saved for this profile
-        (profile_dir / ".auth_saved").touch()
+        # 3. Mark authentication saved for this profile only if a token file exists
+        has_token = (
+            (profile_dir / KEYRING_TOKEN_FILE).exists()
+            or (profile_dir / (KEYRING_TOKEN_FILE + ".bak")).exists()
+            or any((profile_dir / rel).exists() for rel in _TOKEN_RELPATHS)
+        )
+        if has_token:
+            (profile_dir / ".auth_saved").touch()
+        elif (profile_dir / ".auth_saved").exists():
+            (profile_dir / ".auth_saved").unlink()
     except Exception:
         pass
 
@@ -959,9 +1033,6 @@ def _sync_profile_now(profile_name, profile_dir, session_start_ts=None):
         profile_dir.mkdir(parents=True, exist_ok=True)
         keyring_file = profile_dir / KEYRING_TOKEN_FILE
 
-        meta = _load_meta(profile_name)
-        bound_email = meta.get("email")
-
         existing_tok = None
         if keyring_file.exists() and keyring_file.stat().st_size > 10:
             try:
@@ -976,10 +1047,18 @@ def _sync_profile_now(profile_name, profile_dir, session_start_ts=None):
                 except Exception:
                     pass
 
-        if not bound_email and existing_tok:
+        # Determine bound email:
+        # A profile is bound ONLY if it has an existing saved token file!
+        # If there is no existing token file, this is a fresh or reset profile:
+        # it must NEVER reject a newly acquired token due to stale metadata!
+        bound_email = None
+        if existing_tok:
             bound_email = KeyringManager.extract_email(existing_tok)
+            if not bound_email:
+                meta = _load_meta(profile_name)
+                bound_email = meta.get("email")
 
-        # 1. Capture token from system keyring and safely validate/merge
+        # Capture token from system keyring and safely validate/merge
         tok = KeyringManager.get_token()
         if tok:
             merged_tok, email, status = safe_merge_token(tok, existing_tok, bound_email)
@@ -993,11 +1072,6 @@ def _sync_profile_now(profile_name, profile_dir, session_start_ts=None):
                     (profile_dir / ".auth_saved").touch()
             # If status == mismatch (token belongs to another Google account),
             # DO NOT TOUCH THIS PROFILE!
-
-        # 2. If email still not in metadata, scan logs scoped to this session
-        meta = _load_meta(profile_name)
-        if not meta.get("email"):
-            _persist_profile_email(profile_name, session_start_ts)
     except Exception:
         pass
 
@@ -1895,9 +1969,7 @@ def _cmd_reset_auth(profile_name):
             pass
 
     # Remove the cached email from metadata so TUI shows no stale account
-    meta = _load_meta(name)
-    meta.pop("email", None)
-    _save_meta(name, **{k: v for k, v in meta.items()})
+    _save_meta(name, email=None)
 
     print(f"{C_GREEN}✓ Auth reset for profile '{name}'.{C_RESET}")
     print(f"  {C_GRAY}Removed {cleared} token file(s).  Previous account: {old_email}{C_RESET}")
