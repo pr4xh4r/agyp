@@ -16,7 +16,7 @@
 ![macOS](https://img.shields.io/badge/macOS-✓-blue?style=flat-square&logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Version](https://img.shields.io/badge/version-1.5.0-orange?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.6.1-orange?style=flat-square)
 
 <img src="assets/mainpage.png" width="48%"> <img src="assets/profilepage.png" width="48%">
 
@@ -35,14 +35,15 @@ With `agyp`, you can create **unlimited profiles**. Hit a limit? Just open `agyp
 
 ## Features
 
+- 📊 **Live Quota & Reset Tracking:** Real-time Gemini (5-hour rolling limit) and Claude quotas displayed in a single row with countdown reset timers (`Gemini: 96% (4h 15m) │ Claude: 0% (4h 26m)`).
 - ⚡ **Instant Account Switching:** Jump between work, personal, or backup accounts in seconds.
 - 🔒 **True Keyring & Session Isolation:** Handles Antigravity's OS Keyring (SecretService / macOS Keychain) token swaps so multiple Google accounts never conflict.
 - 🔄 **Unified Mode:** Want to share your conversation history across different accounts? Unified mode swaps only the auth tokens.
-- 🎨 **Beautiful Interactive TUI:** Flicker-free, arrow-key navigation. Add, rename, and delete profiles right from the terminal.
+- 🎨 **Flicker-Free TUI:** Smooth, leak-free arrow-key & Vim navigation. Add, rename, and delete profiles right from the terminal.
 - 🏷️ **Smart Labels:** Automatically detects and persistently stores the authenticated Google email next to each profile — even across log rotations.
 - 🔁 **Token Pre-seeding:** Saved tokens are injected into agy's internal sandbox slots before launch, so you never have to re-authenticate when switching between existing profiles.
 - 📋 **Persistent Metadata:** Email address and last-used timestamps are stored in a lightweight `.meta/` store — reliable across agy updates and log format changes.
-- 🔧 **Zero Dependencies:** Built in pure Python. Extremely lightweight and fast (~150ms startup).
+- 🔧 **Zero Dependencies:** Built in pure Python. Extremely lightweight and fast.
 
 ---
 
