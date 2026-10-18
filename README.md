@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/logo.svg" width="100" alt="Antigravity Logo" />
+<img src="assets/logo.svg" width="170" alt="Antigravity Logo" />
 
 # `agyp` — Antigravity Profiles Manager
 
