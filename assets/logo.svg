@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="25 15 110 60" width="110" height="60">
+  <!-- Antigravity Pixel Art Icon -->
+  <g shape-rendering="crispEdges">
+    <!-- Row 1 (top) -->
+    <rect x="70" y="20" width="10" height="10" fill="#ED7D31" />
+    <rect x="80" y="20" width="10" height="10" fill="#E15535" />
+
+    <!-- Row 2 -->
+    <rect x="60" y="30" width="10" height="10" fill="#E2A63B" />
+    <rect x="70" y="30" width="10" height="10" fill="#ED7D31" />
+    <rect x="80" y="30" width="10" height="10" fill="#E15535" />
+    <rect x="90" y="30" width="10" height="10" fill="#D34047" />
+
+    <!-- Row 3 -->
+    <rect x="50" y="40" width="10" height="10" fill="#7DB452" />
+    <rect x="60" y="40" width="10" height="10" fill="#A1B347" />
+    <rect x="70" y="40" width="10" height="10" fill="#ED7D31" />
+    <rect x="80" y="40" width="10" height="10" fill="#E15535" />
+    <rect x="90" y="40" width="10" height="10" fill="#A25E99" />
+    <rect x="100" y="40" width="10" height="10" fill="#885E99" />
+
+    <!-- Row 4 -->
+    <rect x="40" y="50" width="10" height="10" fill="#6CBE5A" />
+    <rect x="50" y="50" width="10" height="10" fill="#4787D6" />
+    <rect x="100" y="50" width="10" height="10" fill="#6871C8" />
+    <rect x="110" y="50" width="10" height="10" fill="#6466CB" />
+
+    <!-- Row 5 (legs) -->
+    <rect x="30" y="60" width="10" height="10" fill="#55B5DE" />
+    <rect x="40" y="60" width="10" height="10" fill="#4787D6" />
+    <rect x="110" y="60" width="10" height="10" fill="#4787D6" />
+    <rect x="120" y="60" width="10" height="10" fill="#3B78C4" />
+  </g>
+</svg>

@@ -1,12 +1,6 @@
 <div align="center">
 
-```
-       ▄▀▀▄      
-      ▀▀▀▀▀▀     
-     ▀▀▀▀▀▀▀▀    
-    ▄▀▀    ▀▀▄   
-   ▄▀▀      ▀▀▄  
-```
+<img src="assets/logo.svg" width="100" alt="Antigravity Logo" />
 
 # `agyp` — Antigravity Profiles Manager
 
@@ -40,9 +34,13 @@ Normally, switching accounts is a headache:
 ## 🖥️ What It Looks Like
 
 ```text
- █▄ ▄█  Antigravity Profiles  v1.6.4
-  ▀█▀   (BETA)
- █▀ ▀█
+       ▄▀▀▄       
+      ▀▀▀▀▀▀      
+     ▀▀▀▀▀▀▀▀     Antigravity Profiles  v1.6.4
+    ▄▀▀    ▀▀▄           (BETA)
+   ▄▀▀      ▀▀▄   
+
+─────────────────────────────────────────────────────
 
  Select a profile to launch:  mode: Unified
 
