@@ -1,123 +1,214 @@
 <div align="center">
 
-<pre>
+```
        ▄▀▀▄      
       ▀▀▀▀▀▀     
      ▀▀▀▀▀▀▀▀    
     ▄▀▀    ▀▀▄   
    ▄▀▀      ▀▀▄  
-</pre>
+```
 
-# Antigravity Profiles (`agyp`) **BETA**
+# `agyp` — Antigravity Profiles Manager
 
-**Manage unlimited Antigravity (`agy`) accounts from a single terminal.**
+**Never let a rate limit interrupt your flow.**  
+Manage multiple Google Antigravity (`agy`) accounts seamlessly from a single lightweight terminal menu.
 
-![Linux](https://img.shields.io/badge/Linux-✓-blue?style=flat-square&logo=linux&logoColor=white)
-![macOS](https://img.shields.io/badge/macOS-✓-blue?style=flat-square&logo=apple&logoColor=white)
-![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Version](https://img.shields.io/badge/version-1.6.4-orange?style=flat-square)
-
-<img src="assets/mainpage.png" width="48%"> <img src="assets/profilepage.png" width="48%">
+[![Version](https://img.shields.io/badge/version-1.6.4-orange?style=flat-square)](https://github.com/pr4xh4r/agyp)
+[![Python](https://img.shields.io/badge/python-3.8+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Linux](https://img.shields.io/badge/linux-supported-green?style=flat-square&logo=linux&logoColor=white)](https://github.com/pr4xh4r/agyp)
+[![macOS](https://img.shields.io/badge/macOS-supported-green?style=flat-square&logo=apple&logoColor=white)](https://github.com/pr4xh4r/agyp)
+[![License](https://img.shields.io/badge/license-MIT-purple?style=flat-square)](LICENSE)
 
 </div>
 
 ---
 
-## Why does this exist?
+### The Problem
+If you use Google Antigravity (`agy`) for daily coding, you've definitely run into this: you're right in the middle of building a feature, debugging a tricky bug, or iterating on a complex prompt, and suddenly — **you hit your 5-hour rolling limit or weekly quota.**
 
-You are deep into a coding session with Antigravity (`agy`) and suddenly... **you hit the rate limit.**  
-Normally, you'd have to log out, log into a different Google account, and lose your entire conversation history and context.
+Normally, switching accounts is a headache:
+1. You have to log out of `agy`.
+2. Re-authenticate in your browser with a secondary Google account.
+3. Deal with token conflicts and lost terminal state.
+4. Repeat the whole dance again once the backup account runs low.
 
-**Not anymore.**
-
-With `agyp`, you can create **unlimited profiles**. Hit a limit? Just open `agyp`, switch to your backup account, and keep coding.
-
-## Features
-
-- 📊 **Live Quota & Reset Tracking:** Real-time Gemini (5-hour rolling limit) and Claude quotas displayed in a single row with countdown reset timers (`Gemini: 96% (4h 15m) │ Claude: 0% (4h 26m)`).
-- ⚡ **Instant Account Switching:** Jump between work, personal, or backup accounts in seconds.
-- 🔒 **True Keyring & Session Isolation:** Handles Antigravity's OS Keyring (SecretService / macOS Keychain) token swaps so multiple Google accounts never conflict.
-- 🔄 **Unified Mode:** Want to share your conversation history across different accounts? Unified mode swaps only the auth tokens.
-- 🎨 **Flicker-Free TUI:** Smooth, leak-free arrow-key & mouse navigation (click to select, wheel to scroll). Add, rename, and delete profiles right from the terminal.
-- 🏷️ **Smart Labels:** Automatically detects and persistently stores the authenticated Google email next to each profile — even across log rotations.
-- 🔁 **Token Pre-seeding:** Saved tokens are injected into agy's internal sandbox slots before launch, so you never have to re-authenticate when switching between existing profiles.
-- 📋 **Persistent Metadata:** Email address and last-used timestamps are stored in a lightweight `.meta/` store — reliable across agy updates and log format changes.
-- 🔧 **Zero Dependencies:** Built in pure Python. Extremely lightweight and fast.
+### The Solution: `agyp`
+`agyp` lets you register as many backup Google accounts as you want. Each account lives in its own profile with saved authentication credentials. When one profile runs low on quota, just pop open `agyp`, switch to another account in one keystroke, and keep coding without missing a beat.
 
 ---
 
-## Installation
+## 🖥️ What It Looks Like
 
-**Linux**
+```text
+ █▄ ▄█  Antigravity Profiles  v1.6.4
+  ▀█▀   (BETA)
+ █▀ ▀█
+
+ Select a profile to launch:  mode: Unified
+
+   p1   [work.lead@company.com]        G·5h: 100%   G·Wk: 100%   C·5h: 100%   C·Wk: 100%
+   p2   [secondary.dev@gmail.com]      G·5h: 100%   G·Wk: 100%   C·5h: 100%   C·Wk:  50%
+ ❯ p3   [personal.account@gmail.com]   G·5h: 100%   G·Wk: 100%   C·5h:  39%   C·Wk:  19%
+   p4   [backup.testing@gmail.com]     G·5h:  97%   G·Wk: 100%   C·5h:   0%   C·Wk:   0%
+   p5   [old.session@gmail.com]        [session expired — login on launch]
+   + Add Profile
+   ~ Rename Profile
+   - Delete Profile
+   ◆ Community
+   ← Back
+   ✕ Quit
+
+ ↑/↓ or scroll to move · Enter or click to select
+ ↻ p3 quota refreshes: C·5h in 3h 52m · C·Wk in 4d 11h
+```
+
+---
+
+## ✨ Features That Make Life Easier
+
+- **Live 4-Column Quota Tracking**: Shows both **Gemini** (5-Hour Rolling & Weekly) and **Claude / GPT** (5-Hour Rolling & Weekly) side-by-side in real-time.
+- **Zero Ragged Lines**: Column widths are strictly aligned down to the character. No jagged tables or text hopping across the screen.
+- **Dynamic Refresh Timers**: Active countdown timers (`↻ p3 quota refreshes: C·5h in 3h 52m · C·Wk in 4d 11h`) update dynamically in the footer when you highlight a profile, keeping the main table distraction-free.
+- **Instant O(1) Navigation**: Pre-cached email lookups ensure scrolling and arrow-key movement remain instantaneous and buttery smooth, even with dozens of profiles.
+- **Session Expiration Alerts**: If an OAuth token ever expires on Google's backend, `agyp` tags it immediately as `[session expired — login on launch]` instead of hanging or spinning forever.
+- **Mouse & Keyboard Support**: Navigate with `↑` / `↓` arrow keys, or just click with your mouse and scroll with the wheel.
+- **Two Launch Modes**:
+  - **Isolated (Incognito)**: Completely separate sandbox for each profile (separate tokens, chat history, and cache).
+  - **Unified Mode**: Keep your shared conversation history in `~/.gemini` while swapping only authentication tokens.
+- **Token Pre-Seeding**: Tokens are automatically injected into `agy`'s internal account sandboxes before launch, so you don't get forced into browser login loops.
+- **Zero Dependencies**: Pure Python 3 standard library. No `pip install`, no external bloat, and runs on any standard terminal.
+
+---
+
+## ⚡ Quick Installation
+
+Clone and install with a single command:
+
+### Linux
 ```bash
 git clone https://github.com/pr4xh4r/agyp
 cd agyp
 bash install.sh
 ```
 
-**macOS**
+### macOS
 ```bash
 git clone https://github.com/pr4xh4r/agyp
 cd agyp
 bash install_mac.sh
 ```
 
-> **Note:** If you see `agyp: command not found` after installing, ensure `~/.local/bin` is in your PATH. Add `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc` or `~/.zshrc`.
+> **Note:** If `agyp` is not recognized after install, ensure `~/.local/bin` is in your `PATH`.  
+> Add this to your `~/.bashrc` or `~/.zshrc` if needed:
+> ```bash
+> export PATH="$HOME/.local/bin:$PATH"
+> ```
 
 ---
 
-## Usage
+## 🚀 How to Use
 
-Just run:
+### 1. Interactive TUI (Most Common)
+Simply type:
 ```bash
 agyp
 ```
-You'll be greeted by an interactive menu to choose your launch mode and select a profile. The first time you use a new profile, `agy` will ask you to log in. After that, it remembers you!
+This opens the interactive menu where you can:
+- Choose between **Isolated** or **Unified** mode.
+- View live quotas across all your accounts.
+- Press **Enter** to launch Antigravity with your chosen profile.
+- Add, rename, or delete profiles straight from the interface.
 
-### All Commands
+*When you launch a newly created profile for the first time, `agy` will prompt you to log into Google in your browser. Once done, `agyp` securely remembers that account forever.*
 
-| Command | Description |
-|---|---|
-| `agyp` | Launch the interactive profile manager (with live quota meters) |
-| `agyp <profile>` | Launch a named profile directly (isolated mode) |
-| `agyp <profile> [args...]` | Launch a profile and pass extra args to `agy` |
-| `agyp list` | List all profiles with email, live Gemini (5h) & Claude quotas |
-| `agyp quota` | View a dedicated table of Gemini & Claude quota limits and reset timers |
-| `agyp info <profile>` | Show detailed info: email, token status, live quotas, disk usage, dates |
-| `agyp rename <old> <new>` | Rename a profile |
-| `agyp delete <profile>` | Delete a profile (with confirmation prompt) |
-| `agyp duplicate <src> <dst>` | Clone a profile workspace |
-| `agyp reset-auth <profile>` | Clear saved tokens for a profile to force fresh login |
-| `agyp --version` | Show version |
-| `agyp --help` | Show help |
+### 2. Direct Launch from Terminal
+You can also launch any profile directly without going through the menu:
+```bash
+# Launch a specific profile directly
+agyp p2
 
+# Launch with extra flags passed directly to agy
+agyp p2 --model gemini-3.8-flash-high
 
-## How It Works
-
-### Isolated Mode (default)
-Each profile is a completely separate `HOME` directory under `~/agyp-profiles/<name>/`. When you launch a profile, `agy` runs with `HOME` pointed at that directory, giving it a totally independent auth store, history, and workspace.
-
-After every session, `agyp` automatically:
-1. Scans all possible token locations (including `agy`'s internal `.agy_accounts/` sub-sandboxes)
-2. Saves the newest token back to the canonical profile path
-3. Detects and persistently stores your authenticated email in `~/agyp-profiles/.meta/<name>.json`
-
-### Unified Mode
-Tokens from the selected profile are swapped into your real `~/.gemini/` directory before `agy` starts, and saved back when the session ends. History and workspace are shared across profiles.
+# Launch with a quick prompt
+agyp p3 -p "Explain how asyncio tasks work in Python"
+```
 
 ---
 
-## Built by
+## 📖 Command Reference
 
-Made by **[pr4xh4r](https://github.com/pr4xh4r)** — proud member of the **[Build x](https://x.com/buildx_main)** community.
+| Command | What it does |
+| :--- | :--- |
+| `agyp` | Opens the interactive visual manager with live quotas |
+| `agyp <profile>` | Launches a profile directly in isolated mode |
+| `agyp <profile> [args...]` | Passes custom arguments directly to the underlying `agy` CLI |
+| `agyp list` | Displays a clean summary table of all profiles and emails |
+| `agyp quota` | Quick terminal readout of quota percentages and reset countdowns |
+| `agyp info <profile>` | Shows metadata (email, token age, disk usage, creation date) |
+| `agyp rename <old> <new>` | Renames an existing profile |
+| `agyp delete <profile>` | Removes a profile folder and its saved credentials |
+| `agyp duplicate <src> <dst>` | Clones an existing profile environment |
+| `agyp reset-auth <profile>` | Wipes saved tokens to force a fresh Google OAuth login |
+| `agyp --version` | Prints the installed `agyp` version |
+| `agyp --help` | Displays command line usage and flags |
 
-Join us:
-- ❯ X (Twitter): [x.com/buildx_main](https://x.com/buildx_main)
-- ❯ Telegram: [t.me/buildx_main](https://t.me/buildx_main)
-- ❯ Reddit: [r/buildx_main](https://reddit.com/r/buildx_main)
-- ❯ Discord: [discord.gg/ShZRBUZ7AX](https://discord.gg/ShZRBUZ7AX)
+---
 
-## License
+## 🔒 Isolated vs. Unified Mode
 
-MIT © [pr4xh4r](https://github.com/pr4xh4r)
+When you run `agyp`, you can pick how profiles run:
+
+### 1. Isolated Mode (Incognito) — Recommended for Complete Separation
+Each profile gets its own isolated home directory under `~/agyp-profiles/<name>/`.
+- Completely separate chat history and scratchpad.
+- Zero chance of personal or client work leaking between accounts.
+- Best if you manage client projects, work accounts, and personal accounts.
+
+### 2. Unified Mode — Best for Continuous Coding
+Shares your global Antigravity workspace and history (`~/.gemini/`), but seamlessly swaps out the active Google authentication token.
+- Keeps your previous conversation transcripts intact.
+- Seamlessly lets you continue your coding flow on another account when one hits a limit.
+
+---
+
+## 🛠️ Frequently Asked Questions
+
+<details>
+<summary><b>Does agyp store my passwords?</b></summary>
+No. <code>agyp</code> never sees or touches your Google password. It only manages official OAuth2 access and refresh tokens generated directly by Google's authentication flow, exactly the same way the official <code>agy</code> CLI does.
+</details>
+
+<details>
+<summary><b>Where are my profiles saved?</b></summary>
+All profile data is kept locally on your machine under <code>~/agyp-profiles/</code>.
+</details>
+
+<details>
+<summary><b>How does quota fetching work?</b></summary>
+<code>agyp</code> queries Google's internal Cloud Code service endpoints (<code>fetchAvailableModels</code> and <code>retrieveUserQuotaSummary</code>) using your saved OAuth tokens. Requests are cached in-memory and in lightweight JSON metadata, so the UI never lags or makes unnecessary network calls.
+</details>
+
+<details>
+<summary><b>What does "[session expired — login on launch]" mean?</b></summary>
+Google OAuth refresh tokens occasionally expire if an account has been inactive for a long time or permissions changed. When this happens, <code>agyp</code> lets you know right away. Just press Enter on that profile to launch it, and Google will prompt you to sign in again.
+</details>
+
+---
+
+## 👥 Community & Support
+
+`agyp` is built by **[pr4xh4r](https://github.com/pr4xh4r)** and supported by the **[Build x](https://x.com/buildx_main)** developer community.
+
+Join us to share feedback, ask questions, or hang out:
+- **X (Twitter)**: [@buildx_main](https://x.com/buildx_main)
+- **Discord**: [Join our Discord](https://discord.gg/ShZRBUZ7AX)
+- **Telegram**: [t.me/buildx_main](https://t.me/buildx_main)
+- **Reddit**: [r/buildx_main](https://reddit.com/r/buildx_main)
+
+---
+
+## 📄 License
+
+Distributed under the **MIT License**. See `LICENSE` for more information.  
+Crafted with precision for developers who refuse to wait on rate limits.
