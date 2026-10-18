@@ -16,7 +16,7 @@
 ![macOS](https://img.shields.io/badge/macOS-✓-blue?style=flat-square&logo=apple&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
-![Version](https://img.shields.io/badge/version-1.6.3-orange?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.6.4-orange?style=flat-square)
 
 <img src="assets/mainpage.png" width="48%"> <img src="assets/profilepage.png" width="48%">
 

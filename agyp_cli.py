@@ -55,7 +55,7 @@ try:
 except (ImportError, KeyError):
     _SYSTEM_HOME = REAL_HOME
 
-VERSION = "1.6.3"
+VERSION = "1.6.4"
 
 # ── Brand Colors (Antigravity TrueColor ANSI) ──────────────────────────────────
 C_BLUE   = "\033[38;2;66;133;244m"
@@ -758,10 +758,18 @@ def _persist_profile_email(profile_name, session_start_ts=None):
 
 _OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 _MODELS_API_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+_QUOTA_SUMMARY_API_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 _QUOTA_CACHE_TTL = 120  # seconds
 
 _MEM_QUOTA_CACHE = {}  # In-memory fast cache: {profile_name: quota_dict}
 _AGY_OAUTH_CREDS = None
+
+# Braille spinner frames for quota-loading animation
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+# Self-pipe used by the ticker thread to trigger re-renders during quota loading
+_TICK_PIPE_R, _TICK_PIPE_W = os.pipe()
+
 
 
 def _get_agy_oauth_creds():
@@ -870,6 +878,129 @@ def _parse_model_quota(models_dict, prefix="gemini"):
     return {"pct": pct, "reset_time": reset_time}
 
 
+def _parse_model_quota_both(models_dict, prefix="gemini"):
+    """Extract both short-window (~5h) and long-window (weekly) quotas.
+
+    Short: resetTime ≤12h from now  → 5-hour rolling limit
+    Long:  resetTime >12h from now  → weekly / daily cap
+
+    When a model has no resetTime (quota 100% full), it fills whichever
+    window slot is still empty — so both G·5h and G·Wk get populated.
+
+    Returns: (short_q, long_q) — each is {"pct": int, "reset_time": str|None} or None.
+    """
+    short_q = None
+    long_q  = None
+    now_utc = datetime.now(timezone.utc)
+
+    for k, v in sorted(models_dict.items()):
+        if not k.startswith(prefix):
+            continue
+        if not isinstance(v, dict) or "quotaInfo" not in v:
+            continue
+        qi = v["quotaInfo"]
+        rem = qi.get("remainingFraction")
+        reset_time = qi.get("resetTime")
+        if rem is None and not reset_time:
+            continue
+
+        pct = max(0, min(100, int(round(rem * 100)))) if rem is not None else 100
+
+        if not reset_time:
+            # Full quota — no reset needed. Fill whichever slot is empty so
+            # both weekly and 5h windows can be populated from separate models.
+            entry = {"pct": pct, "reset_time": None}
+            if short_q is None:
+                short_q = entry
+            elif long_q is None:
+                long_q = entry
+            continue
+
+        try:
+            r_str = reset_time[:-1] + "+00:00" if reset_time.endswith("Z") else reset_time
+            r_dt = datetime.fromisoformat(r_str)
+            secs = (r_dt - now_utc).total_seconds()
+            if secs <= 0:
+                entry = {"pct": 100, "reset_time": None}
+                if short_q is None:
+                    short_q = entry
+                elif long_q is None:
+                    long_q = entry
+            elif secs <= 43200:   # ≤12h → short window (5h rolling)
+                if short_q is None:
+                    short_q = {"pct": pct, "reset_time": reset_time}
+            else:                 # >12h → weekly / long cap
+                if long_q is None:
+                    long_q = {"pct": pct, "reset_time": reset_time}
+        except Exception:
+            if short_q is None:
+                short_q = {"pct": pct, "reset_time": reset_time}
+
+    # If only one window found and it's fully available (pct=100, no reset),
+    # mirror it to the other window — both limits are full in that case.
+    if short_q is not None and long_q is None:
+        if short_q.get("pct") == 100 and not short_q.get("reset_time"):
+            long_q = {"pct": 100, "reset_time": None}
+    elif long_q is not None and short_q is None:
+        if long_q.get("pct") == 100 and not long_q.get("reset_time"):
+            short_q = {"pct": 100, "reset_time": None}
+
+    return short_q, long_q
+
+
+def _parse_summary_quotas(summary_data):
+    """Extract 5h and weekly quotas from retrieveUserQuotaSummary response.
+    Returns: (claude_5h, claude_week, gemini_5h, gemini_week)
+    """
+    claude_5h = None
+    claude_week = None
+    gemini_5h = None
+    gemini_week = None
+
+    if not summary_data or "groups" not in summary_data:
+        return None, None, None, None
+
+    now_utc = datetime.now(timezone.utc)
+
+    for g in summary_data.get("groups", []):
+        dname = (g.get("displayName") or "").lower()
+        is_claude = "claude" in dname or "gpt" in dname or "3p" in dname
+        is_gemini = "gemini" in dname
+
+        for b in g.get("buckets", []):
+            bid = (b.get("bucketId") or "").lower()
+            win = (b.get("window") or "").lower()
+            rem = b.get("remainingFraction")
+            reset_time = b.get("resetTime")
+
+            pct = max(0, min(100, int(round(rem * 100)))) if rem is not None else (0 if reset_time else 100)
+            if reset_time:
+                try:
+                    r_str = reset_time[:-1] + "+00:00" if reset_time.endswith("Z") else reset_time
+                    if (datetime.fromisoformat(r_str) - now_utc).total_seconds() <= 0:
+                        pct = 100
+                        reset_time = None
+                except Exception:
+                    pass
+
+            entry = {"pct": pct, "reset_time": reset_time}
+            is_5h = "5h" in bid or "5h" in win
+            is_wk = "week" in bid or "weekly" in win or "wk" in bid
+
+            if is_claude:
+                if is_5h:
+                    claude_5h = entry
+                elif is_wk:
+                    claude_week = entry
+            elif is_gemini:
+                if is_5h:
+                    gemini_5h = entry
+                elif is_wk:
+                    gemini_week = entry
+
+    return claude_5h, claude_week, gemini_5h, gemini_week
+
+
 def _refresh_profile_token(profile_name, refresh_token):
     """Refresh an expired access token using Google OAuth2 endpoint, persisting update to disk."""
     if not refresh_token:
@@ -939,7 +1070,9 @@ def fetch_profile_quota(profile_name, force=False, network=True):
     p_dir = PROFILES_DIR / profile_name
     tok_file = p_dir / KEYRING_TOKEN_FILE
     if not tok_file.exists() or tok_file.stat().st_size <= 10:
-        return None
+        err_res = {"failed": True, "error": "no_account", "fetched_at": time.time()}
+        _MEM_QUOTA_CACHE[profile_name] = err_res
+        return err_res
 
     try:
         data = json.loads(tok_file.read_text(encoding="utf-8"))
@@ -947,14 +1080,18 @@ def fetch_profile_quota(profile_name, force=False, network=True):
         access_token = tok.get("access_token")
         refresh_token = tok.get("refresh_token")
     except Exception:
-        return None
+        err_res = {"failed": True, "error": "no_token", "fetched_at": time.time()}
+        _MEM_QUOTA_CACHE[profile_name] = err_res
+        return err_res
 
     if not access_token:
-        return None
+        err_res = {"failed": True, "error": "no_token", "fetched_at": time.time()}
+        _MEM_QUOTA_CACHE[profile_name] = err_res
+        return err_res
 
-    def _query_api(atk):
+    def _query_api(url, atk):
         req = urllib.request.Request(
-            _MODELS_API_URL,
+            url,
             headers={
                 "Authorization": f"Bearer {atk}",
                 "Content-Type": "application/json",
@@ -965,32 +1102,83 @@ def fetch_profile_quota(profile_name, force=False, network=True):
         with urllib.request.urlopen(req, timeout=4) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
+    summary_data = None
     models_data = None
-    try:
-        models_data = _query_api(access_token)
-    except urllib.error.HTTPError as e:
-        if e.code == 401 and refresh_token:
-            new_atk = _refresh_profile_token(profile_name, refresh_token)
-            if new_atk:
-                try:
-                    models_data = _query_api(new_atk)
-                except Exception:
-                    pass
-    except Exception:
-        pass
+    auth_refreshed = False
 
-    if not models_data or "models" not in models_data:
+    # Attempt fetching summary data and models data
+    for attempt in range(2):
+        cur_atk = access_token
+        try:
+            if not summary_data:
+                summary_data = _query_api(_QUOTA_SUMMARY_API_URL, cur_atk)
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and refresh_token and not auth_refreshed:
+                new_atk = _refresh_profile_token(profile_name, refresh_token)
+                if new_atk:
+                    access_token = new_atk
+                    auth_refreshed = True
+                    continue
+        except Exception:
+            pass
+
+        try:
+            if not models_data:
+                models_data = _query_api(_MODELS_API_URL, access_token)
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and refresh_token and not auth_refreshed:
+                new_atk = _refresh_profile_token(profile_name, refresh_token)
+                if new_atk:
+                    access_token = new_atk
+                    auth_refreshed = True
+                    continue
+        except Exception:
+            pass
+        break
+
+    if not summary_data and not models_data:
         meta = _load_meta(profile_name)
-        return meta.get("quota")
+        cached_meta = meta.get("quota") if meta else None
+        if cached_meta:
+            _MEM_QUOTA_CACHE[profile_name] = cached_meta
+            return cached_meta
+        err_res = {"failed": True, "error": "expired", "fetched_at": time.time()}
+        _MEM_QUOTA_CACHE[profile_name] = err_res
+        return err_res
 
-    models = models_data.get("models", {})
-    gemini_q = _parse_model_quota(models, "gemini")
-    claude_q = _parse_model_quota(models, "claude")
+    s_c5h, s_cwk, s_g5h, s_gwk = _parse_summary_quotas(summary_data)
+
+    models = models_data.get("models", {}) if models_data else {}
+    m_g5h, m_gwk = _parse_model_quota_both(models, "gemini")
+    m_c5h, m_cwk = _parse_model_quota_both(models, "claude")
+
+    g_short = s_g5h or m_g5h
+    g_long  = s_gwk or m_gwk
+    c_short = s_c5h or m_c5h
+    c_long  = s_cwk or m_cwk
+
+    # Fallbacks so columns are never falsely blank:
+    # Gemini models have both a rolling 5h window and a weekly cap.
+    # Unless a weekly limit is exhausted, Gemini weekly is 100%.
+    if g_short is not None and g_long is None:
+        g_long = {"pct": 100, "reset_time": None}
+    elif g_long is not None and g_short is None:
+        g_short = {"pct": 100, "reset_time": None}
+
+    # For Claude: if weekly is 100% and 5h was not separately throttled, 5h is 100%.
+    if c_long is not None and c_short is None and c_long.get("pct") == 100:
+        c_short = {"pct": 100, "reset_time": None}
+    elif c_short is not None and c_long is None and c_short.get("pct") == 100:
+        c_long = {"pct": 100, "reset_time": None}
 
     quota_dict = {
-        "gemini": gemini_q,
-        "claude": claude_q,
-        "fetched_at": time.time(),
+        "gemini":      g_short or _parse_model_quota(models, "gemini"),  # backward compat
+        "claude":      c_long  or _parse_model_quota(models, "claude"),  # backward compat
+        "gemini_5h":   g_short,
+        "gemini_week": g_long,
+        "claude_5h":   c_short,
+        "claude_week": c_long,
+        "fetched_at":  time.time(),
     }
 
     _MEM_QUOTA_CACHE[profile_name] = quota_dict
@@ -1005,6 +1193,7 @@ def batch_fetch_quotas(profiles, force=False, max_workers=10):
     for p in profiles:
         tok_file = PROFILES_DIR / p / KEYRING_TOKEN_FILE
         if not tok_file.exists() or tok_file.stat().st_size <= 10:
+            _MEM_QUOTA_CACHE[p] = {"failed": True, "error": "no_account", "fetched_at": now}
             continue
         cached = _MEM_QUOTA_CACHE.get(p)
         if not force and cached and (now - cached.get("fetched_at", 0) < _QUOTA_CACHE_TTL):
@@ -1064,6 +1253,60 @@ def format_quota_inline(quota_dict):
 
     sep = f" {C_GRAY}│{C_RESET} "
     return sep.join(parts)
+
+
+
+def format_quota_resets(quota_dict):
+    """Return active countdowns for quota resets as a clean readable string."""
+    if not quota_dict or quota_dict.get("failed"):
+        return ""
+    g5h = quota_dict.get("gemini_5h")
+    gwk = quota_dict.get("gemini_week")
+    c5h = quota_dict.get("claude_5h")
+    cwk = quota_dict.get("claude_week")
+
+    items = []
+    for data, lbl in [(g5h, "G·5h"), (gwk, "G·Wk"), (c5h, "C·5h"), (cwk, "C·Wk")]:
+        if data:
+            pct = data.get("pct")
+            rst = format_reset_delta(data.get("reset_time")) if (pct is not None and pct < 100) else ""
+            if rst:
+                items.append(f"{lbl} in {rst}")
+    return " · ".join(items)
+
+
+def format_quota_4col(quota_dict):
+    """Returns (g5h_col, gwk_col, c5h_col, cwk_col) — 4 clean, fixed-width ANSI strings.
+
+    G·5h = Gemini 5-hour rolling | G·Wk = Gemini weekly
+    C·5h = Claude 5-hour rolling | C·Wk = Claude weekly
+
+    Each string is exactly 10 visible characters wide ('Label: pct') for
+    perfect column alignment across all rows without ragged timers.
+    """
+    empty = ("", "", "", "")
+    if not quota_dict or quota_dict.get("failed"):
+        return empty
+    g5h = quota_dict.get("gemini_5h")   or quota_dict.get("gemini")
+    gwk = quota_dict.get("gemini_week")
+    c5h = quota_dict.get("claude_5h")
+    cwk = quota_dict.get("claude_week") or quota_dict.get("claude")
+    if not any([g5h, gwk, c5h, cwk]):
+        return empty
+
+    def _fmt(data, label):
+        if not data:
+            return f"{C_GRAY}{label}:   \u2014{C_RESET}"
+        pct = data.get("pct")
+        return f"{C_GRAY}{label}:{C_RESET} {_color_quota_pct(pct)}"
+
+    return (
+        _fmt(g5h, "G\u00b75h"),
+        _fmt(gwk, "G\u00b7Wk"),
+        _fmt(c5h, "C\u00b75h"),
+        _fmt(cwk, "C\u00b7Wk"),
+    )
+
 
 
 # ── Token pre-seeding ──────────────────────────────────────────────────────────
@@ -1853,6 +2096,12 @@ def get_key():
 
     try:
         try:
+            # Wait for either a real keypress or a background tick signal
+            r, _, _ = select.select([fd, _TICK_PIPE_R], [], [])
+            if _TICK_PIPE_R in r:
+                os.read(_TICK_PIPE_R, 1)   # drain one tick byte
+                if fd not in r:
+                    return "tick"           # pure tick, no keypress
             ch = os.read(fd, 1)
         except Exception:
             return "other"
@@ -1989,11 +2238,11 @@ def show_community():
     ]
 
     links = [
-        ("\uf099 X (Twitter) ", "https://x.com/buildx_main"),
-        ("\uf2c6 Telegram    ", "https://t.me/buildx_main"),
-        ("\uf281 Reddit      ", "https://reddit.com/r/buildx_main"),
-        ("\uf392 Discord     ", "https://discord.gg/ShZRBUZ7AX"),
-        ("Go Back",             None),
+        ("\uf099  X (Twitter)", "https://x.com/buildx_main"),
+        ("\uf2c6  Telegram",    "https://t.me/buildx_main"),
+        ("\uf281  Reddit",      "https://reddit.com/r/buildx_main"),
+        ("\uf392  Discord",     "https://discord.gg/ShZRBUZ7AX"),
+        ("\u2190  Go Back",     None),
     ]
 
     idx = 0
@@ -2009,12 +2258,12 @@ def show_community():
                     if url:
                         print(f"  {C_BLUE}\u276f {label}{C_RESET}  \033[38;2;100;100;100m{url}\033[0m")
                     else:
-                        print(f"  {C_BLUE}\u276f {C_GRAY}[x] {label}{C_RESET}")
+                        print(f"  {C_BLUE}\u276f {label}{C_RESET}")
                 else:
                     if url:
                         print(f"    {C_GRAY}{label}{C_RESET}  \033[38;2;100;100;100m{url}\033[0m")
                     else:
-                        print(f"    {C_GRAY}[x] {label}{C_RESET}")
+                        print(f"    {C_GRAY}{label}{C_RESET}")
             print(f"\n {C_GRAY}\u2191/\u2193 or scroll to move \u00b7 Enter or click to open \u00b7 Esc to go back{C_RESET}")
 
         key = get_key()
@@ -2046,10 +2295,10 @@ def show_community():
 def ask_mode():
     """Ask isolated vs unified. Returns 'isolated', 'unified', or 'EXIT'."""
     options = [
-        ("isolated", "Isolated (Recommended)", "[Each profile 100% separate - clean history & tokens]"),
-        ("unified",  "Unified",                "[Shared history in ~/.gemini, token-only swap]"),
-        ("join_us",  "",                       ""),
-        ("exit",     "",                       ""),
+        ("isolated",  "Isolated",  "(Incognito) \u00b7 Each profile 100% separate \u00b7 clean history & tokens"),
+        ("unified",   "Unified",   "Shared history in ~/.gemini \u00b7 token-only swap"),
+        ("community", "",          ""),
+        ("quit",      "",          ""),
     ]
     idx = 0
     drain_input()
@@ -2059,17 +2308,17 @@ def ask_mode():
             print(f" {C_WHITE}Choose launch mode:{C_RESET}\n")
             for i, (label, tag, desc) in enumerate(options):
                 if i == idx:
-                    if label == "exit":
-                        print(f"  {C_BLUE}\u276f {C_GRAY}[x] Exit{C_RESET}")
-                    elif label == "join_us":
-                        print(f"  {C_BLUE}\u276f {C_JOIN}[♥] Join Us{C_RESET}")
+                    if label == "quit":
+                        print(f"  {C_BLUE}\u276f {C_GRAY}\u2715 Quit{C_RESET}")
+                    elif label == "community":
+                        print(f"  {C_BLUE}\u276f {C_JOIN}\u25c6 Community{C_RESET}")
                     else:
                         print(f"  {C_BLUE}\u276f {C_WHITE}{tag}{C_RESET}  {C_GRAY}{desc}{C_RESET}")
                 else:
-                    if label == "exit":
-                        print(f"    {C_GRAY}[x] Exit{C_RESET}")
-                    elif label == "join_us":
-                        print(f"    {C_JOIN}[♥] Join Us{C_RESET}")
+                    if label == "quit":
+                        print(f"    {C_GRAY}\u2715 Quit{C_RESET}")
+                    elif label == "community":
+                        print(f"    {C_JOIN}\u25c6 Community{C_RESET}")
                     else:
                         print(f"    {C_GRAY}{tag}{C_RESET}  {C_GRAY}{desc}{C_RESET}")
             print(f"\n {C_GRAY}\u2191/\u2193 or scroll to move \u00b7 Enter or click to confirm{C_RESET}")
@@ -2089,9 +2338,9 @@ def ask_mode():
         if key == 'enter':
             lbl = options[idx][0]
             drain_input()
-            if lbl == "exit":
+            if lbl == "quit":
                 return "EXIT"
-            elif lbl == "join_us":
+            elif lbl == "community":
                 show_community()
                 drain_input()
             else:
@@ -2108,36 +2357,71 @@ def interactive_menu(profiles, launch_mode="isolated"):
     mode = "main"
     current_idx = 0
     options = []
-    max_email_len = max((len(get_profile_email(p) or "") for p in profiles), default=0)
+
+    # Performance: pre-cache all emails — eliminates per-frame disk reads
+    _email_cache = {p: get_profile_email(p) for p in profiles}
+    max_email_len = max((len(_email_cache.get(p) or "") for p in profiles), default=0)
+
+    # 4-column quota display widths (visible chars): G·5h | G·Wk | C·5h | C·Wk
+    _G5W, _GKW, _C5W, _CKW = 10, 10, 10, 10
+
+    def _refresh_email_cache():
+        """Rebuild email cache after profile create / rename / delete."""
+        nonlocal _email_cache, max_email_len
+        _email_cache = {p: get_profile_email(p) for p in profiles}
+        max_email_len = max((len(_email_cache.get(p) or "") for p in profiles), default=0)
 
     # Background prefetch quotas so navigation remains completely fluid
     threading.Thread(target=batch_fetch_quotas, args=(profiles,), daemon=True).start()
+
+    # Spinner frame counter — increments each render cycle
+    _spin_frame = [0]
+
+    def _quota_ticker():
+        """Tick every 600 ms while any profile still has no quota loaded.
+        Writes a byte to the self-pipe so get_key() unblocks and triggers a re-render."""
+        ticks = 0
+        while ticks < 25:  # max 15s timeout
+            time.sleep(0.6)
+            ticks += 1
+            all_done = all(_MEM_QUOTA_CACHE.get(p) is not None for p in profiles)
+            try:
+                os.write(_TICK_PIPE_W, b"\x00")
+            except OSError:
+                break
+            if all_done:
+                break
+
+    threading.Thread(target=_quota_ticker, daemon=True).start()
 
     def build_options():
         nonlocal options
         if mode == "main":
             options = profiles + [
-                "[+] Add Profile",
-                "[~] Rename Profile",
-                "[-] Delete Profile",
-                f"{C_JOIN}[♥] Join Us{C_RESET}",
-                f"{C_GRAY}[x] Exit{C_RESET}",
+                "+ Add Profile",
+                "~ Rename Profile",
+                "- Delete Profile",
+                f"{C_JOIN}\u25c6 Community{C_RESET}",
+                f"{C_GRAY}\u2190 Back{C_RESET}",
+                f"{C_GRAY}\u2715 Quit{C_RESET}",
             ]
         elif mode == "delete":
-            options = profiles + [f"{C_GRAY}[<] Back{C_RESET}"]
+            options = profiles + [f"{C_GRAY}\u2190 Back{C_RESET}"]
         elif mode == "rename":
-            options = profiles + [f"{C_GRAY}[<] Back{C_RESET}"]
+            options = profiles + [f"{C_GRAY}\u2190 Back{C_RESET}"]
         elif mode == "create":
-            options = [f"{C_GREEN}[>] Enter Profile Name{C_RESET}", f"{C_GRAY}[<] Back{C_RESET}"]
+            options = [f"{C_GREEN}\u203a Enter Profile Name{C_RESET}", f"{C_GRAY}\u2190 Back{C_RESET}"]
 
     while True:
         build_options()
 
         with TerminalBuffer():
+            _spin_frame[0] += 1
+            spin_char = _SPINNER[_spin_frame[0] % len(_SPINNER)]
             draw_header()
             if mode == "main":
                 mode_label = (
-                    f"\033[38;2;112;230;39mIsolated\033[0m"
+                    f"\033[38;2;112;230;39mIsolated (Incognito)\033[0m"
                     if launch_mode == "isolated"
                     else f"{C_YELLOW}Unified{C_RESET}"
                 )
@@ -2157,17 +2441,41 @@ def interactive_menu(profiles, launch_mode="isolated"):
                 suffix = ""
                 is_prof = i < len(profiles) and mode in ("main", "delete", "rename")
                 if is_prof:
-                    email = get_profile_email(opt)
+                    email = _email_cache.get(opt)
                     if email:
-                        is_dupe = any(p != opt and get_profile_email(p) == email for p in profiles)
-                        dupe_tag = f" {C_YELLOW}(duplicate){C_RESET}" if is_dupe else ""
+                        is_dupe = any(p != opt and _email_cache.get(p) == email for p in profiles)
+                        dupe_tag = f" {C_YELLOW}(dupe){C_RESET}" if is_dupe else ""
                         email_pad = " " * max(0, max_email_len - len(email))
                         q = fetch_profile_quota(opt, network=False)
-                        q_inline = format_quota_inline(q)
-                        q_part = f"  {q_inline}" if q_inline else ""
+                        if q is None:
+                            # Quota still loading — show animated spinner in first column
+                            sp = f"{C_GRAY}{spin_char}{C_RESET}"
+                            q_part = (
+                                f"  {pad_ansi(sp, _G5W)}"
+                                f"  {pad_ansi('', _GKW)}"
+                                f"  {pad_ansi('', _C5W)}"
+                                f"  {pad_ansi('', _CKW)}"
+                            )
+                        elif q.get("failed"):
+                            err_reason = q.get("error", "no_data")
+                            if err_reason == "expired":
+                                q_part = f"  {C_YELLOW}[session expired \u2014 login on launch]{C_RESET}"
+                            elif err_reason == "no_token":
+                                q_part = f"  {C_YELLOW}[no token \u2014 login on launch]{C_RESET}"
+                            else:
+                                q_part = f"  {C_GRAY}\u2014 unreachable{C_RESET}"
+                        else:
+                            g5h, gwk, c5h, cwk = format_quota_4col(q)
+                            q_part = (
+                                f"  {pad_ansi(g5h, _G5W)}"
+                                f"  {pad_ansi(gwk, _GKW)}"
+                                f"  {pad_ansi(c5h, _C5W)}"
+                                f"  {pad_ansi(cwk, _CKW)}"
+                            ) if any([g5h, gwk, c5h, cwk]) else f"  {C_GRAY}\u2014 no quota data{C_RESET}"
                         suffix = f"  {C_CYAN}[{email}]{C_RESET}{email_pad}{dupe_tag}{q_part}"
                     else:
-                        suffix = f"  {C_YELLOW}[no account — login on launch]{C_RESET}"
+                        suffix = f"  {C_YELLOW}[no account \u2014 login on launch]{C_RESET}"
+
 
                 p_disp = f"{opt:<4}" if is_prof else opt
                 if i == current_idx:
@@ -2178,10 +2486,21 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     else:
                         print(f"    {p_disp}{suffix}")
 
-            print(f"\n {C_GRAY}\u2191/\u2193 or scroll to move \u00b7 Enter or click to select{C_RESET}")
+            reset_hint = ""
+            if mode == "main" and current_idx < len(profiles):
+                sel_p = profiles[current_idx]
+                sel_q = fetch_profile_quota(sel_p, network=False)
+                if sel_q and not sel_q.get("failed"):
+                    r_str = format_quota_resets(sel_q)
+                    if r_str:
+                        reset_hint = f"\n {C_CYAN}\u21bb{C_RESET} {C_GRAY}{sel_p} quota refreshes:{C_RESET} {C_WHITE}{r_str}{C_RESET}"
+
+            print(f"\n {C_GRAY}\u2191/\u2193 or scroll to move \u00b7 Enter or click to select{C_RESET}{reset_hint}")
 
         key = get_key()
 
+        if key == 'tick':
+            continue                  # background re-render tick — just loop back
         if key == 'up':
             current_idx = (current_idx - 1) % len(options)
         elif key == 'down':
@@ -2220,10 +2539,13 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     mode = "delete"
                     current_idx = 0
                     drain_input()
-                elif current_idx == n + 3:    # Join Us
+                elif current_idx == n + 3:    # Community
                     show_community()
                     drain_input()
-                elif current_idx == n + 4:    # Exit
+                elif current_idx == n + 4:    # Back → mode selection
+                    drain_input()
+                    return "BACK"
+                elif current_idx == n + 5:    # Quit
                     drain_input()
                     return "EXIT"
 
@@ -2267,9 +2589,10 @@ def interactive_menu(profiles, launch_mode="isolated"):
                     new_name = sanitize_name(raw)
                     if new_name and not (PROFILES_DIR / new_name).exists():
                         (PROFILES_DIR / p_old).rename(PROFILES_DIR / new_name)
-                        _rename_meta(p_old, new_name)          # FIX: keep metadata in sync
+                        _rename_meta(p_old, new_name)
                         profiles[profiles.index(p_old)] = new_name
                         profiles.sort()
+                        _refresh_email_cache()
                     mode = "main"
                     current_idx = 0
                 else:
@@ -2295,9 +2618,10 @@ def interactive_menu(profiles, launch_mode="isolated"):
                         target = PROFILES_DIR / p_del
                         if target.exists():
                             shutil.rmtree(target)
-                        _delete_meta(p_del)                    # FIX: also remove metadata
+                        _delete_meta(p_del)
                         profiles.remove(p_del)
                         current_idx = min(current_idx, max(0, len(profiles) - 1))
+                        _refresh_email_cache()
                     mode = "main"
                     current_idx = 0
                 else:
@@ -2758,22 +3082,29 @@ def main():
         pass
 
     exiting = False
+    selected_profile = None
+    mode = None
     try:
         with RawTerminalSession():
-            mode = ask_mode()
-            if mode == "EXIT":
-                exiting = True
-                return
+            while True:
+                mode = ask_mode()
+                if mode == "EXIT":
+                    exiting = True
+                    break
 
-            time.sleep(0.05)
-            drain_input()
+                time.sleep(0.05)
+                drain_input()
 
-            profiles = _list_profiles()
+                profiles = _list_profiles()
 
-            selected_profile = interactive_menu(profiles, launch_mode=mode)
-            if selected_profile == "EXIT" or not selected_profile:
-                exiting = True
-                return
+                selected_profile = interactive_menu(profiles, launch_mode=mode)
+                if selected_profile == "BACK":
+                    drain_input()
+                    continue          # return to mode selection
+                if selected_profile == "EXIT" or not selected_profile:
+                    exiting = True
+                    break
+                break                 # valid profile selected
 
     finally:
         # Always restore terminal FIRST
